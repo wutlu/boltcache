@@ -1,0 +1,36 @@
+# Development Configuration
+server:
+  mode: "both"  # Both TCP and REST for development
+  tcp:
+    port: 6380
+  rest:
+    port: 8090
+    cors_enabled: true
+
+cache:
+  max_memory: "512MB"
+  cleanup_interval: "30s"
+  eviction_policy: "lru"
+
+persistence:
+  enabled: true
+  file: "./data/dev-cache.json"
+  interval: "10s"  # More frequent saves in dev
+
+security:
+  auth:
+    enabled: true
+    method: "token"
+    tokens:
+      - "dev-token-123"
+      - "test-token-456"
+
+logging:
+  level: "debug"
+  format: "text"
+  file: "./logs/dev.log"
+
+features:
+  lua_scripting: true
+  pub_sub: true
+  complex_types: true

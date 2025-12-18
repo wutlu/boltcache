@@ -1,0 +1,146 @@
+# BoltCache Configuration File
+# ============================
+
+# Server Configuration
+server:
+  # Server mode: tcp, rest, both
+  mode: "rest"
+  
+  # TCP Server Settings
+  tcp:
+    host: "0.0.0.0"
+    port: 6380
+    max_connections: 1000
+    read_timeout: "30s"
+    write_timeout: "30s"
+    
+  # REST API Settings  
+  rest:
+    host: "0.0.0.0"
+    port: 8090
+    cors_enabled: true
+    cors_origins: ["*"]
+    request_timeout: "30s"
+    max_request_size: "10MB"
+
+# Cache Configuration
+cache:
+  # Memory limits
+  max_memory: "1GB"
+  max_keys: 1000000
+  
+  # TTL Settings
+  default_ttl: "0s"  # 0 = no expiration
+  max_ttl: "24h"
+  cleanup_interval: "1m"
+  
+  # Eviction policy: lru, lfu, random, ttl
+  eviction_policy: "lru"
+  eviction_threshold: 0.8  # Start evicting at 80% memory
+
+# Persistence Configuration
+persistence:
+  enabled: true
+  file: "./data/boltcache.json"
+  interval: "30s"
+  compression: true
+  backup_count: 3
+  
+  # Snapshot settings
+  snapshot:
+    enabled: true
+    interval: "5m"
+    directory: "./snapshots"
+
+# Clustering Configuration
+cluster:
+  enabled: false
+  node_id: "node1"
+  
+  # Replication
+  replication:
+    enabled: false
+    mode: "async"  # sync, async
+    replicas: []
+    # - "localhost:6381"
+    # - "localhost:6382"
+    
+  # Discovery
+  discovery:
+    method: "static"  # static, consul, etcd
+    endpoints: []
+
+# Security Configuration
+security:
+  # Authentication
+  auth:
+    enabled: false
+    method: "token"  # token, basic, jwt
+    tokens: []
+    # - "your-secret-token"
+    
+  # TLS/SSL
+  tls:
+    enabled: false
+    cert_file: ""
+    key_file: ""
+    
+  # Rate limiting
+  rate_limit:
+    enabled: true
+    requests_per_second: 1000
+    burst: 100
+
+# Logging Configuration
+logging:
+  level: "info"  # debug, info, warn, error
+  format: "json"  # json, text
+  file: "./logs/boltcache.log"
+  max_size: "100MB"
+  max_backups: 5
+  compress: true
+
+# Monitoring Configuration
+monitoring:
+  # Metrics
+  metrics:
+    enabled: true
+    endpoint: "/metrics"
+    interval: "10s"
+    
+  # Health checks
+  health:
+    enabled: true
+    endpoint: "/health"
+    
+  # Profiling
+  profiling:
+    enabled: false
+    endpoint: "/debug/pprof"
+
+# Performance Tuning
+performance:
+  # Goroutine limits
+  max_goroutines: 10000
+  
+  # Buffer sizes
+  read_buffer_size: "4KB"
+  write_buffer_size: "4KB"
+  
+  # GC tuning
+  gc_percent: 100
+  
+  # Connection pooling
+  connection_pool:
+    max_idle: 100
+    max_active: 1000
+    idle_timeout: "5m"
+
+# Feature Flags
+features:
+  lua_scripting: true
+  pub_sub: true
+  complex_types: true
+  transactions: false
+  geo_commands: false
+  streams: false

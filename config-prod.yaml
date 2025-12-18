@@ -1,0 +1,78 @@
+# Production Configuration
+server:
+  mode: "rest"  # REST only for production
+  rest:
+    host: "0.0.0.0"
+    port: 8090
+    cors_enabled: false  # Disable CORS in production
+    request_timeout: "30s"
+
+cache:
+  max_memory: "4GB"
+  max_keys: 10000000
+  cleanup_interval: "5m"
+  eviction_policy: "lru"
+  eviction_threshold: 0.85
+
+persistence:
+  enabled: true
+  file: "/var/lib/boltcache/data.json"
+  interval: "60s"
+  compression: true
+  backup_count: 5
+  snapshot:
+    enabled: true
+    interval: "15m"
+    directory: "/var/lib/boltcache/snapshots"
+
+cluster:
+  enabled: true
+  node_id: "prod-node-1"
+  replication:
+    enabled: true
+    mode: "async"
+    replicas:
+      - "prod-node-2:6380"
+      - "prod-node-3:6380"
+
+security:
+  auth:
+    enabled: true
+    method: "token"
+    tokens:
+      - "your-production-token-here"
+  rate_limit:
+    enabled: true
+    requests_per_second: 10000
+    burst: 1000
+
+logging:
+  level: "info"
+  format: "json"
+  file: "/var/log/boltcache/app.log"
+  max_size: "100MB"
+  max_backups: 10
+  compress: true
+
+monitoring:
+  metrics:
+    enabled: true
+    endpoint: "/metrics"
+    interval: "10s"
+  health:
+    enabled: true
+    endpoint: "/health"
+
+performance:
+  max_goroutines: 50000
+  gc_percent: 75  # More aggressive GC for production
+  connection_pool:
+    max_idle: 500
+    max_active: 5000
+    idle_timeout: "5m"
+
+features:
+  lua_scripting: true
+  pub_sub: true
+  complex_types: true
+  transactions: false

@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  boltcache-master:
+    build: .
+    ports:
+      - "6380:6380"
+    volumes:
+      - ./data/master:/app/data
+    command: ["./boltcache", "/app/data/master.json"]
+    
+  boltcache-slave1:
+    build: .
+    ports:
+      - "6381:6380"
+    volumes:
+      - ./data/slave1:/app/data
+    command: ["./boltcache", "/app/data/slave1.json", "boltcache-master:6380"]
+    depends_on:
+      - boltcache-master
+      
+  boltcache-slave2:
+    build: .
+    ports:
+      - "6382:6380"
+    volumes:
+      - ./data/slave2:/app/data
+    command: ["./boltcache", "/app/data/slave2.json", "boltcache-master:6380"]
+    depends_on:
+      - boltcache-master

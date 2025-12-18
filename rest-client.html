@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>BoltCache REST Client</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        input, textarea, button { margin: 5px; padding: 8px; }
+        button { background: #007cba; color: white; border: none; border-radius: 3px; cursor: pointer; }
+        button:hover { background: #005a87; }
+        .response { background: #f5f5f5; padding: 10px; margin: 10px 0; border-radius: 3px; }
+        .error { background: #ffebee; color: #c62828; }
+        .success { background: #e8f5e8; color: #2e7d32; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 BoltCache REST Client</h1>
+        
+        <!-- Authentication -->
+        <div class="section">
+            <h3>🔐 Authentication</h3>
+            <div>
+                <input type="text" id="authToken" placeholder="API Token" value="dev-token-123" />
+                <button onclick="setToken()">Set Token</button>
+                <button onclick="createToken()">Create New Token</button>
+                <button onclick="listTokens()">List Tokens</button>
+            </div>
+        </div>
+        
+        <!-- String Operations -->
+        <div class="section">
+            <h3>String Operations</h3>
+            <div>
+                <input type="text" id="setKey" placeholder="Key" />
+                <input type="text" id="setValue" placeholder="Value" />
+                <input type="text" id="setTTL" placeholder="TTL (e.g., 5m)" />
+                <button onclick="setCache()">SET</button>
+            </div>
+            <div>
+                <input type="text" id="getKey" placeholder="Key" />
+                <button onclick="getCache()">GET</button>
+                <button onclick="deleteCache()">DELETE</button>
+            </div>
+        </div>
+
+        <!-- List Operations -->
+        <div class="section">
+            <h3>List Operations</h3>
+            <div>
+                <input type="text" id="listKey" placeholder="List Key" />
+                <input type="text" id="listValues" placeholder="Values (comma separated)" />
+                <button onclick="listPush()">LPUSH</button>
+                <button onclick="listPop()">LPOP</button>
+            </div>
+        </div>
+
+        <!-- Set Operations -->
+        <div class="section">
+            <h3>Set Operations</h3>
+            <div>
+                <input type="text" id="setKey2" placeholder="Set Key" />
+                <input type="text" id="setMembers" placeholder="Members (comma separated)" />
+                <button onclick="setAdd()">SADD</button>
+                <button onclick="setGetMembers()">SMEMBERS</button>
+            </div>
+        </div>
+
+        <!-- Hash Operations -->
+        <div class="section">
+            <h3>Hash Operations</h3>
+            <div>
+                <input type="text" id="hashKey" placeholder="Hash Key" />
+                <input type="text" id="hashField" placeholder="Field" />
+                <input type="text" id="hashValue" placeholder="Value" />
+                <button onclick="hashSet()">HSET</button>
+                <button onclick="hashGet()">HGET</button>
+            </div>
+        </div>
+
+        <!-- Pub/Sub -->
+        <div class="section">
+            <h3>Pub/Sub</h3>
+            <div>
+                <input type="text" id="channel" placeholder="Channel" />
+                <button onclick="subscribe()">Subscribe (WebSocket)</button>
+                <button onclick="disconnect()">Disconnect</button>
+            </div>
+            <div>
+                <input type="text" id="pubChannel" placeholder="Channel" />
+                <input type="text" id="message" placeholder="Message" />
+                <button onclick="publish()">Publish</button>
+            </div>
+            <div id="messages" class="response" style="height: 100px; overflow-y: auto;"></div>
+        </div>
+
+        <!-- Script Execution -->
+        <div class="section">
+            <h3>Lua Script</h3>
+            <div>
+                <textarea id="script" placeholder="Script" rows="3" style="width: 100%;">redis.call('SET', KEYS[1], ARGV[1])</textarea>
+            </div>
+            <div>
+                <input type="text" id="scriptKeys" placeholder="Keys (comma separated)" />
+                <input type="text" id="scriptArgs" placeholder="Args (comma separated)" />
+                <button onclick="evalScript()">EVAL</button>
+            </div>
+        </div>
+
+        <!-- Info -->
+        <div class="section">
+            <h3>Server Info</h3>
+            <button onclick="ping()">PING</button>
+            <button onclick="info()">INFO</button>
+        </div>
+
+        <div id="response" class="response"></div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8090';
+        let ws = null;
+        let currentToken = 'dev-token-123';
+
+        function setToken() {
+            currentToken = document.getElementById('authToken').value;
+            showResponse({ message: 'Token set: ' + currentToken });
+        }
+
+        async function createToken() {
+            const data = await apiCall('POST', '/auth/tokens');
+            if (data && data.value && data.value.token) {
+                document.getElementById('authToken').value = data.value.token;
+                currentToken = data.value.token;
+            }
+        }
+
+        async function listTokens() {
+            await apiCall('GET', '/auth/tokens');
+        }
+
+        function showResponse(data, isError = false) {
+            const div = document.getElementById('response');
+            div.className = 'response ' + (isError ? 'error' : 'success');
+            div.innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
+        }
+
+        async function apiCall(method, url, body = null) {
+            try {
+                const options = {
+                    method,
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + currentToken
+                    }
+                };
+                if (body) options.body = JSON.stringify(body);
+                
+                const response = await fetch(API_BASE + url, options);
+                const data = await response.json();
+                showResponse(data, !response.ok);
+                return data;
+            } catch (error) {
+                showResponse({ error: error.message }, true);
+            }
+        }
+
+        // String operations
+        function setCache() {
+            const key = document.getElementById('setKey').value;
+            const value = document.getElementById('setValue').value;
+            const ttl = document.getElementById('setTTL').value;
+            const body = { value };
+            if (ttl) body.ttl = ttl;
+            apiCall('PUT', `/cache/${key}`, body);
+        }
+
+        function getCache() {
+            const key = document.getElementById('getKey').value;
+            apiCall('GET', `/cache/${key}`);
+        }
+
+        function deleteCache() {
+            const key = document.getElementById('getKey').value;
+            apiCall('DELETE', `/cache/${key}`);
+        }
+
+        // List operations
+        function listPush() {
+            const key = document.getElementById('listKey').value;
+            const values = document.getElementById('listValues').value.split(',').map(v => v.trim());
+            apiCall('POST', `/list/${key}`, values);
+        }
+
+        function listPop() {
+            const key = document.getElementById('listKey').value;
+            apiCall('DELETE', `/list/${key}`);
+        }
+
+        // Set operations
+        function setAdd() {
+            const key = document.getElementById('setKey2').value;
+            const members = document.getElementById('setMembers').value.split(',').map(v => v.trim());
+            apiCall('POST', `/set/${key}`, members);
+        }
+
+        function setGetMembers() {
+            const key = document.getElementById('setKey2').value;
+            apiCall('GET', `/set/${key}`);
+        }
+
+        // Hash operations
+        function hashSet() {
+            const key = document.getElementById('hashKey').value;
+            const field = document.getElementById('hashField').value;
+            const value = document.getElementById('hashValue').value;
+            apiCall('PUT', `/hash/${key}/${field}`, { value });
+        }
+
+        function hashGet() {
+            const key = document.getElementById('hashKey').value;
+            const field = document.getElementById('hashField').value;
+            apiCall('GET', `/hash/${key}/${field}`);
+        }
+
+        // Pub/Sub
+        function subscribe() {
+            const channel = document.getElementById('channel').value;
+            if (ws) ws.close();
+            
+            ws = new WebSocket(`ws://localhost:8090/subscribe/${channel}`);
+            ws.onmessage = function(event) {
+                const messages = document.getElementById('messages');
+                messages.innerHTML += '<div>' + new Date().toLocaleTimeString() + ': ' + event.data + '</div>';
+                messages.scrollTop = messages.scrollHeight;
+            };
+            ws.onopen = function() {
+                showResponse({ message: `Subscribed to ${channel}` });
+            };
+        }
+
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+                showResponse({ message: 'Disconnected' });
+            }
+        }
+
+        function publish() {
+            const channel = document.getElementById('pubChannel').value;
+            const message = document.getElementById('message').value;
+            apiCall('POST', `/publish/${channel}`, { message });
+        }
+
+        // Script execution
+        function evalScript() {
+            const script = document.getElementById('script').value;
+            const keys = document.getElementById('scriptKeys').value.split(',').map(v => v.trim()).filter(v => v);
+            const args = document.getElementById('scriptArgs').value.split(',').map(v => v.trim()).filter(v => v);
+            apiCall('POST', '/eval', { script, keys, args });
+        }
+
+        // Info
+        function ping() {
+            apiCall('GET', '/ping');
+        }
+
+        function info() {
+            apiCall('GET', '/info');
+        }
+    </script>
+</body>
+</html>

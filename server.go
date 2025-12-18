@@ -1,0 +1,265 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"runtime"
+	"runtime/debug"
+	"syscall"
+	"time"
+
+	"github.com/gorilla/websocket"
+)
+
+type Server struct {
+	config *Config
+	cache  *BoltCache
+}
+
+func NewServer(configFile string) (*Server, error) {
+	// Load configuration
+	config, err := LoadConfig(configFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load config: %v", err)
+	}
+
+	// Validate configuration
+	if err := config.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid config: %v", err)
+	}
+
+	// Apply performance settings
+	applyPerformanceSettings(config)
+
+	// Create cache with config
+	cache := NewBoltCacheWithConfig(config)
+
+	return &Server{
+		config: config,
+		cache:  cache,
+	}, nil
+}
+
+func (s *Server) Start() error {
+	log.Printf("Starting BoltCache server...")
+	log.Printf("Mode: %s", s.config.Server.Mode)
+	log.Printf("Features: Lua=%v, PubSub=%v, ComplexTypes=%v", 
+		s.config.Features.LuaScripting,
+		s.config.Features.PubSub,
+		s.config.Features.ComplexTypes)
+
+	// Setup graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Start servers based on mode
+	switch s.config.Server.Mode {
+	case "tcp":
+		go s.startTCPServer()
+	case "rest":
+		go s.startRESTServer()
+	case "both":
+		go s.startTCPServer()
+		go s.startRESTServer()
+	default:
+		return fmt.Errorf("invalid server mode: %s", s.config.Server.Mode)
+	}
+
+	// Start monitoring if enabled
+	if s.config.Monitoring.Metrics.Enabled {
+		go s.startMetricsServer()
+	}
+
+	// Wait for shutdown signal
+	<-sigChan
+	log.Println("Shutting down server...")
+	
+	// Graceful shutdown
+	s.shutdown()
+	return nil
+}
+
+func (s *Server) startTCPServer() {
+	addr := s.config.GetTCPAddress()
+	log.Printf("TCP server starting on %s", addr)
+	
+	// Implementation would go here
+	// For now, just log
+	log.Printf("TCP server would start on %s", addr)
+}
+
+func (s *Server) startRESTServer() {
+	restServer := NewRestServerWithConfig(s.cache, s.config)
+	addr := s.config.GetRESTAddress()
+	log.Printf("REST server starting on %s", addr)
+	
+	if err := restServer.Start(); err != nil {
+		log.Fatalf("Failed to start REST server: %v", err)
+	}
+}
+
+func (s *Server) startMetricsServer() {
+	// Metrics server implementation
+	log.Printf("Metrics server starting on %s", s.config.Monitoring.Metrics.Endpoint)
+}
+
+func (s *Server) shutdown() {
+	log.Println("Performing graceful shutdown...")
+	
+	// Save data if persistence is enabled
+	if s.config.Persistence.Enabled {
+		log.Println("Saving data to disk...")
+		s.cache.forcePersist()
+	}
+	
+	log.Println("Shutdown complete")
+}
+
+func applyPerformanceSettings(config *Config) {
+	// Set GC percentage
+	if config.Performance.GCPercent > 0 {
+		debug.SetGCPercent(config.Performance.GCPercent)
+		log.Printf("Set GC percent to %d", config.Performance.GCPercent)
+	}
+
+	// Set max goroutines (via GOMAXPROCS)
+	if config.Performance.MaxGoroutines > 0 {
+		runtime.GOMAXPROCS(config.Performance.MaxGoroutines)
+		log.Printf("Set GOMAXPROCS to %d", config.Performance.MaxGoroutines)
+	}
+
+	log.Printf("Applied performance settings")
+}
+
+// Enhanced BoltCache constructor with config
+func NewBoltCacheWithConfig(config *Config) *BoltCache {
+	cache := &BoltCache{
+		persistFile: config.Persistence.File,
+		config:      config,
+	}
+
+	// Initialize Lua engine if enabled
+	if config.Features.LuaScripting {
+		cache.luaEngine = NewLuaEngine(cache)
+	}
+
+	// Load from disk if persistence enabled
+	if config.Persistence.Enabled {
+		cache.loadFromDisk()
+	}
+
+	// Start background tasks
+	go cache.cleanupExpiredWithConfig()
+	
+	if config.Persistence.Enabled {
+		go cache.persistToDiskWithConfig()
+	}
+
+	return cache
+}
+
+// Enhanced REST server with config
+func NewRestServerWithConfig(cache *BoltCache, config *Config) *RestServer {
+	return &RestServer{
+		cache:  cache,
+		config: config,
+		upgrader: websocket.Upgrader{
+			CheckOrigin: func(r *http.Request) bool { 
+				return config.Server.REST.CORSEnabled 
+			},
+		},
+	}
+}
+
+// Enhanced cache methods with config
+func (c *BoltCache) cleanupExpiredWithConfig() {
+	interval := c.config.Cache.CleanupInterval
+	if interval == 0 {
+		interval = time.Minute
+	}
+	
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		now := time.Now()
+		expiredKeys := make([]interface{}, 0)
+		
+		c.data.Range(func(key, value interface{}) bool {
+			item := value.(*CacheItem)
+			if !item.ExpiresAt.IsZero() && now.After(item.ExpiresAt) {
+				expiredKeys = append(expiredKeys, key)
+			}
+			return true
+		})
+
+		for _, key := range expiredKeys {
+			c.data.Delete(key)
+		}
+
+		if len(expiredKeys) > 0 {
+			log.Printf("Cleaned up %d expired keys", len(expiredKeys))
+		}
+	}
+}
+
+func (c *BoltCache) persistToDiskWithConfig() {
+	if !c.config.Persistence.Enabled {
+		return
+	}
+
+	interval := c.config.Persistence.Interval
+	if interval == 0 {
+		interval = 30 * time.Second
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		c.forcePersist()
+	}
+}
+
+func (c *BoltCache) forcePersist() {
+	if !c.config.Persistence.Enabled {
+		return
+	}
+
+	items := make(map[string]*CacheItem)
+	c.data.Range(func(key, value interface{}) bool {
+		items[key.(string)] = value.(*CacheItem)
+		return true
+	})
+
+	data, err := json.Marshal(items)
+	if err != nil {
+		log.Printf("Failed to marshal data: %v", err)
+		return
+	}
+
+	// Create backup if enabled
+	if c.config.Persistence.BackupCount > 0 {
+		c.createBackup()
+	}
+
+	// Write to file
+	os.MkdirAll(filepath.Dir(c.config.Persistence.File), 0755)
+	if err := os.WriteFile(c.config.Persistence.File, data, 0644); err != nil {
+		log.Printf("Failed to write persistence file: %v", err)
+	}
+}
+
+func (c *BoltCache) createBackup() {
+	// Backup implementation
+	backupFile := c.config.Persistence.File + ".backup." + time.Now().Format("20060102-150405")
+	
+	if data, err := os.ReadFile(c.config.Persistence.File); err == nil {
+		os.WriteFile(backupFile, data, 0644)
+	}
+}

@@ -1,0 +1,508 @@
+{
+	"info": {
+		"_postman_id": "boltcache-api-collection",
+		"name": "BoltCache REST API",
+		"description": "Complete API collection for BoltCache - Redis-like cache with REST interface",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:8090",
+			"type": "string"
+		}
+	],
+	"item": [
+		{
+			"name": "Health & Info",
+			"item": [
+				{
+					"name": "Ping",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/ping",
+							"host": ["{{baseUrl}}"],
+							"path": ["ping"]
+						}
+					}
+				},
+				{
+					"name": "Server Info",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/info",
+							"host": ["{{baseUrl}}"],
+							"path": ["info"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "String Operations",
+			"item": [
+				{
+					"name": "Set Value",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"value\": \"John Doe\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/cache/user:1",
+							"host": ["{{baseUrl}}"],
+							"path": ["cache", "user:1"]
+						}
+					}
+				},
+				{
+					"name": "Set Value with TTL",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"value\": \"session_active\",\n  \"ttl\": \"5m\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/cache/session:abc123",
+							"host": ["{{baseUrl}}"],
+							"path": ["cache", "session:abc123"]
+						}
+					}
+				},
+				{
+					"name": "Get Value",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/cache/user:1",
+							"host": ["{{baseUrl}}"],
+							"path": ["cache", "user:1"]
+						}
+					}
+				},
+				{
+					"name": "Delete Key",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/cache/user:1",
+							"host": ["{{baseUrl}}"],
+							"path": ["cache", "user:1"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "List Operations",
+			"item": [
+				{
+					"name": "List Push",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "[\"item1\", \"item2\", \"item3\"]"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/list/mylist",
+							"host": ["{{baseUrl}}"],
+							"path": ["list", "mylist"]
+						}
+					}
+				},
+				{
+					"name": "List Pop",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/list/mylist",
+							"host": ["{{baseUrl}}"],
+							"path": ["list", "mylist"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Set Operations",
+			"item": [
+				{
+					"name": "Set Add Members",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "[\"member1\", \"member2\", \"member3\"]"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/set/myset",
+							"host": ["{{baseUrl}}"],
+							"path": ["set", "myset"]
+						}
+					}
+				},
+				{
+					"name": "Set Get Members",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/set/myset",
+							"host": ["{{baseUrl}}"],
+							"path": ["set", "myset"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Hash Operations",
+			"item": [
+				{
+					"name": "Hash Set Field",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"value\": \"John\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/hash/user:1/name",
+							"host": ["{{baseUrl}}"],
+							"path": ["hash", "user:1", "name"]
+						}
+					}
+				},
+				{
+					"name": "Hash Set Age",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"value\": \"30\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/hash/user:1/age",
+							"host": ["{{baseUrl}}"],
+							"path": ["hash", "user:1", "age"]
+						}
+					}
+				},
+				{
+					"name": "Hash Get Field",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/hash/user:1/name",
+							"host": ["{{baseUrl}}"],
+							"path": ["hash", "user:1", "name"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Pub/Sub Operations",
+			"item": [
+				{
+					"name": "Publish Message",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"message\": \"Hello World from BoltCache!\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/publish/notifications",
+							"host": ["{{baseUrl}}"],
+							"path": ["publish", "notifications"]
+						}
+					}
+				},
+				{
+					"name": "Publish User Event",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"message\": \"User John logged in\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/publish/user-events",
+							"host": ["{{baseUrl}}"],
+							"path": ["publish", "user-events"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Lua Scripting",
+			"item": [
+				{
+					"name": "Execute Simple Script",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"script\": \"redis.call('SET', KEYS[1], ARGV[1])\",\n  \"keys\": [\"scriptkey\"],\n  \"args\": [\"scriptvalue\"]\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/eval",
+							"host": ["{{baseUrl}}"],
+							"path": ["eval"]
+						}
+					}
+				},
+				{
+					"name": "Execute Counter Script",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"script\": \"redis.call('INCR', KEYS[1])\",\n  \"keys\": [\"counter\"],\n  \"args\": []\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/eval",
+							"host": ["{{baseUrl}}"],
+							"path": ["eval"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Test Scenarios",
+			"item": [
+				{
+					"name": "Complete User Workflow",
+					"item": [
+						{
+							"name": "1. Create User",
+							"request": {
+								"method": "PUT",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n  \"value\": \"John Doe\"\n}"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/cache/user:123",
+									"host": ["{{baseUrl}}"],
+									"path": ["cache", "user:123"]
+								}
+							}
+						},
+						{
+							"name": "2. Set User Profile",
+							"request": {
+								"method": "PUT",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n  \"value\": \"john@example.com\"\n}"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/hash/user:123/email",
+									"host": ["{{baseUrl}}"],
+									"path": ["hash", "user:123", "email"]
+								}
+							}
+						},
+						{
+							"name": "3. Add to Active Users",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "[\"user:123\"]"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/set/active-users",
+									"host": ["{{baseUrl}}"],
+									"path": ["set", "active-users"]
+								}
+							}
+						},
+						{
+							"name": "4. Create Session",
+							"request": {
+								"method": "PUT",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n  \"value\": \"active\",\n  \"ttl\": \"1h\"\n}"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/cache/session:abc123",
+									"host": ["{{baseUrl}}"],
+									"path": ["cache", "session:abc123"]
+								}
+							}
+						},
+						{
+							"name": "5. Notify Login",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n  \"message\": \"User John Doe logged in\"\n}"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/publish/user-events",
+									"host": ["{{baseUrl}}"],
+									"path": ["publish", "user-events"]
+								}
+							}
+						}
+					]
+				},
+				{
+					"name": "Performance Test",
+					"item": [
+						{
+							"name": "Bulk Set Operations",
+							"request": {
+								"method": "PUT",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n  \"value\": \"test-value-{{$randomInt}}\"\n}"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/cache/test:{{$randomInt}}",
+									"host": ["{{baseUrl}}"],
+									"path": ["cache", "test:{{$randomInt}}"]
+								}
+							}
+						},
+						{
+							"name": "Bulk List Operations",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "[\"item-{{$randomInt}}\", \"item-{{$randomInt}}\", \"item-{{$randomInt}}\"]"
+								},
+								"url": {
+									"raw": "{{baseUrl}}/list/test-list",
+									"host": ["{{baseUrl}}"],
+									"path": ["list", "test-list"]
+								}
+							}
+						}
+					]
+				}
+			]
+		}
+	]
+}
