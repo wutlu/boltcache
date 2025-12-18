@@ -20,8 +20,8 @@ type RestServer struct {
 }
 
 type CacheRequest struct {
-	Value string        `json:"value"`
-	TTL   time.Duration `json:"ttl,omitempty"`
+	Value string `json:"value"`
+	TTL   string `json:"ttl,omitempty"`
 }
 
 type CacheResponse struct {
@@ -51,7 +51,17 @@ func (s *RestServer) setValue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.cache.Set(key, req.Value, req.TTL)
+	var ttl time.Duration
+	if req.TTL != "" {
+		var err error
+		ttl, err = time.ParseDuration(req.TTL)
+		if err != nil {
+			s.sendError(w, "Invalid TTL format", http.StatusBadRequest)
+			return
+		}
+	}
+
+	s.cache.Set(key, req.Value, ttl)
 	s.sendResponse(w, CacheResponse{Success: true})
 }
 
@@ -224,17 +234,29 @@ func (s *RestServer) info(w http.ResponseWriter, r *http.Request) {
 	s.sendResponse(w, CacheResponse{Success: true, Value: info})
 }
 
-// Token management (disabled)
+// Token management
 func (s *RestServer) listTokens(w http.ResponseWriter, r *http.Request) {
-	s.sendResponse(w, CacheResponse{Success: true, Value: map[string]string{}})
+	// Demo token list since auth is disabled
+	tokens := map[string]interface{}{
+		"dev-token-123": map[string]interface{}{
+			"created_at": "2024-01-01T00:00:00Z",
+			"last_used":  "2024-01-01T12:00:00Z",
+			"usage_count": 42,
+		},
+	}
+	s.sendResponse(w, CacheResponse{Success: true, Value: tokens})
 }
 
 func (s *RestServer) createToken(w http.ResponseWriter, r *http.Request) {
-	s.sendResponse(w, CacheResponse{Success: true, Value: map[string]string{"token": "demo-token"}})
+	// Generate a demo token
+	newToken := fmt.Sprintf("token-%d", time.Now().Unix())
+	s.sendResponse(w, CacheResponse{Success: true, Value: map[string]string{"token": newToken}})
 }
 
 func (s *RestServer) deleteToken(w http.ResponseWriter, r *http.Request) {
-	s.sendResponse(w, CacheResponse{Success: true})
+	vars := mux.Vars(r)
+	token := vars["token"]
+	s.sendResponse(w, CacheResponse{Success: true, Value: map[string]string{"message": fmt.Sprintf("Token %s deleted", token)}})
 }
 
 // Health check
@@ -332,17 +354,21 @@ func (s *RestServer) Start() error {
 	// Script execution
 	r.HandleFunc("/eval", s.evalScript).Methods("POST")
 
-	// Auth management (disabled)
-	// r.HandleFunc("/auth/tokens", s.listTokens).Methods("GET")
-	// r.HandleFunc("/auth/tokens", s.createToken).Methods("POST")
-	// r.HandleFunc("/auth/tokens/{token}", s.deleteToken).Methods("DELETE")
+	// Auth management
+	r.HandleFunc("/auth/tokens", s.listTokens).Methods("GET")
+	r.HandleFunc("/auth/tokens", s.createToken).Methods("POST")
+	r.HandleFunc("/auth/tokens/{token}", s.deleteToken).Methods("DELETE")
 
-	// Static files
-	r.PathPrefix("/").Handler(http.FileServer(http.Dir("./"))).Methods("GET")
-
-	// Info
+	// Info and health check - BEFORE static files
 	r.HandleFunc("/info", s.info).Methods("GET")
 	r.HandleFunc("/ping", s.ping).Methods("GET")
+
+	// Static HTML file
+	r.HandleFunc("/rest-client.html", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "./rest-client.html")
+	}).Methods("GET")
+
+
 
 	addr := ":" + strconv.Itoa(port)
 	fmt.Printf("BoltCache REST API started on %s\n", addr)
@@ -359,9 +385,9 @@ func (s *RestServer) Start() error {
 	fmt.Println("  GET    /subscribe/{channel}   - Subscribe (WebSocket)")
 	fmt.Println("  POST   /publish/{channel}     - Publish message")
 	fmt.Println("  POST   /eval                  - Execute script")
-	// fmt.Println("  GET    /auth/tokens           - List tokens")
-	// fmt.Println("  POST   /auth/tokens           - Create token")
-	// fmt.Println("  DELETE /auth/tokens/{token}   - Delete token")
+	fmt.Println("  GET    /auth/tokens           - List tokens")
+	fmt.Println("  POST   /auth/tokens           - Create token")
+	fmt.Println("  DELETE /auth/tokens/{token}   - Delete token")
 	fmt.Println("  GET    /info                  - Server info")
 	fmt.Println("  GET    /ping                  - Health check")
 

@@ -27,6 +27,7 @@
                 <button onclick="createToken()">Create New Token</button>
                 <button onclick="listTokens()">List Tokens</button>
             </div>
+            <div id="authResponse" class="response"></div>
         </div>
         
         <!-- String Operations -->
@@ -43,6 +44,7 @@
                 <button onclick="getCache()">GET</button>
                 <button onclick="deleteCache()">DELETE</button>
             </div>
+            <div id="stringResponse" class="response"></div>
         </div>
 
         <!-- List Operations -->
@@ -54,6 +56,7 @@
                 <button onclick="listPush()">LPUSH</button>
                 <button onclick="listPop()">LPOP</button>
             </div>
+            <div id="listResponse" class="response"></div>
         </div>
 
         <!-- Set Operations -->
@@ -65,6 +68,7 @@
                 <button onclick="setAdd()">SADD</button>
                 <button onclick="setGetMembers()">SMEMBERS</button>
             </div>
+            <div id="setResponse" class="response"></div>
         </div>
 
         <!-- Hash Operations -->
@@ -77,6 +81,7 @@
                 <button onclick="hashSet()">HSET</button>
                 <button onclick="hashGet()">HGET</button>
             </div>
+            <div id="hashResponse" class="response"></div>
         </div>
 
         <!-- Pub/Sub -->
@@ -92,6 +97,7 @@
                 <input type="text" id="message" placeholder="Message" />
                 <button onclick="publish()">Publish</button>
             </div>
+            <div id="pubsubResponse" class="response"></div>
             <div id="messages" class="response" style="height: 100px; overflow-y: auto;"></div>
         </div>
 
@@ -106,6 +112,7 @@
                 <input type="text" id="scriptArgs" placeholder="Args (comma separated)" />
                 <button onclick="evalScript()">EVAL</button>
             </div>
+            <div id="scriptResponse" class="response"></div>
         </div>
 
         <!-- Info -->
@@ -113,9 +120,10 @@
             <h3>Server Info</h3>
             <button onclick="ping()">PING</button>
             <button onclick="info()">INFO</button>
+            <button onclick="testConnection()">Test Connection</button>
+            <div id="infoResponse" class="response"></div>
         </div>
 
-        <div id="response" class="response"></div>
     </div>
 
     <script>
@@ -126,11 +134,11 @@
 
         function setToken() {
             currentToken = document.getElementById('authToken').value;
-            showResponse({ message: 'Token set: ' + currentToken });
+            showResponse({ message: 'Token set: ' + currentToken }, false, 'authResponse');
         }
 
         async function createToken() {
-            const data = await apiCall('POST', '/auth/tokens');
+            const data = await apiCall('POST', '/auth/tokens', null, 'authResponse');
             if (data && data.value && data.value.token) {
                 document.getElementById('authToken').value = data.value.token;
                 currentToken = data.value.token;
@@ -138,16 +146,16 @@
         }
 
         async function listTokens() {
-            await apiCall('GET', '/auth/tokens');
+            await apiCall('GET', '/auth/tokens', null, 'authResponse');
         }
 
-        function showResponse(data, isError = false) {
-            const div = document.getElementById('response');
+        function showResponse(data, isError = false, targetId = 'response') {
+            const div = document.getElementById(targetId);
             div.className = 'response ' + (isError ? 'error' : 'success');
             div.innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
         }
 
-        async function apiCall(method, url, body = null) {
+        async function apiCall(method, url, body = null, targetId = 'response') {
             try {
                 const options = {
                     method,
@@ -159,11 +167,28 @@
                 if (body) options.body = JSON.stringify(body);
                 
                 const response = await fetch(API_BASE + url, options);
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    let errorData;
+                    try {
+                        errorData = JSON.parse(errorText);
+                    } catch {
+                        errorData = { error: `HTTP ${response.status}: ${errorText}` };
+                    }
+                    showResponse(errorData, true, targetId);
+                    return errorData;
+                }
+                
                 const data = await response.json();
-                showResponse(data, !response.ok);
+                showResponse(data, false, targetId);
                 return data;
             } catch (error) {
-                showResponse({ error: error.message }, true);
+                const errorMsg = error.name === 'TypeError' && error.message.includes('fetch') 
+                    ? 'Server not reachable. Please make sure BoltCache is running on port 8090.'
+                    : error.message;
+                showResponse({ error: errorMsg }, true, targetId);
+                return null;
             }
         }
 
@@ -174,41 +199,61 @@
             const ttl = document.getElementById('setTTL').value;
             const body = { value };
             if (ttl) body.ttl = ttl;
-            apiCall('PUT', `/cache/${key}`, body);
+            apiCall('PUT', `/cache/${key}`, body, 'stringResponse');
         }
 
         function getCache() {
             const key = document.getElementById('getKey').value;
-            apiCall('GET', `/cache/${key}`);
+            apiCall('GET', `/cache/${key}`, null, 'stringResponse');
         }
 
         function deleteCache() {
             const key = document.getElementById('getKey').value;
-            apiCall('DELETE', `/cache/${key}`);
+            apiCall('DELETE', `/cache/${key}`, null, 'stringResponse');
         }
 
         // List operations
         function listPush() {
             const key = document.getElementById('listKey').value;
-            const values = document.getElementById('listValues').value.split(',').map(v => v.trim());
-            apiCall('POST', `/list/${key}`, values);
+            const valuesStr = document.getElementById('listValues').value;
+            
+            if (!key) {
+                showResponse({ error: 'Please enter a list key' }, true, 'listResponse');
+                return;
+            }
+            if (!valuesStr) {
+                showResponse({ error: 'Please enter values to push' }, true, 'listResponse');
+                return;
+            }
+            
+            const values = valuesStr.split(',').map(v => v.trim()).filter(v => v);
+            if (values.length === 0) {
+                showResponse({ error: 'No valid values to push' }, true, 'listResponse');
+                return;
+            }
+            
+            apiCall('POST', `/list/${key}`, values, 'listResponse');
         }
 
         function listPop() {
             const key = document.getElementById('listKey').value;
-            apiCall('DELETE', `/list/${key}`);
+            if (!key) {
+                showResponse({ error: 'Please enter a list key' }, true, 'listResponse');
+                return;
+            }
+            apiCall('DELETE', `/list/${key}`, null, 'listResponse');
         }
 
         // Set operations
         function setAdd() {
             const key = document.getElementById('setKey2').value;
             const members = document.getElementById('setMembers').value.split(',').map(v => v.trim());
-            apiCall('POST', `/set/${key}`, members);
+            apiCall('POST', `/set/${key}`, members, 'setResponse');
         }
 
         function setGetMembers() {
             const key = document.getElementById('setKey2').value;
-            apiCall('GET', `/set/${key}`);
+            apiCall('GET', `/set/${key}`, null, 'setResponse');
         }
 
         // Hash operations
@@ -216,13 +261,13 @@
             const key = document.getElementById('hashKey').value;
             const field = document.getElementById('hashField').value;
             const value = document.getElementById('hashValue').value;
-            apiCall('PUT', `/hash/${key}/${field}`, { value });
+            apiCall('PUT', `/hash/${key}/${field}`, { value }, 'hashResponse');
         }
 
         function hashGet() {
             const key = document.getElementById('hashKey').value;
             const field = document.getElementById('hashField').value;
-            apiCall('GET', `/hash/${key}/${field}`);
+            apiCall('GET', `/hash/${key}/${field}`, null, 'hashResponse');
         }
 
         // Pub/Sub
@@ -237,7 +282,7 @@
         function subscribe() {
             const channel = document.getElementById('channel').value;
             if (!channel) {
-                showResponse({ error: 'Please enter a channel name' }, true);
+                showResponse({ error: 'Please enter a channel name' }, true, 'pubsubResponse');
                 return;
             }
             
@@ -252,7 +297,7 @@
             ws.onopen = function() {
                 isSubscribed = true;
                 updateSubscribeButton();
-                showResponse({ message: `Subscribed to ${channel}` });
+                showResponse({ message: `Subscribed to ${channel}` }, false, 'pubsubResponse');
             };
             ws.onclose = function() {
                 isSubscribed = false;
@@ -261,7 +306,7 @@
             ws.onerror = function(error) {
                 isSubscribed = false;
                 updateSubscribeButton();
-                showResponse({ error: 'WebSocket connection failed' }, true);
+                showResponse({ error: 'WebSocket connection failed' }, true, 'pubsubResponse');
             };
         }
 
@@ -271,7 +316,7 @@
                 ws = null;
                 isSubscribed = false;
                 updateSubscribeButton();
-                showResponse({ message: 'Disconnected' });
+                showResponse({ message: 'Disconnected' }, false, 'pubsubResponse');
             }
         }
 
@@ -289,7 +334,7 @@
         function publish() {
             const channel = document.getElementById('pubChannel').value;
             const message = document.getElementById('message').value;
-            apiCall('POST', `/publish/${channel}`, { message });
+            apiCall('POST', `/publish/${channel}`, { message }, 'pubsubResponse');
         }
 
         // Script execution
@@ -297,16 +342,21 @@
             const script = document.getElementById('script').value;
             const keys = document.getElementById('scriptKeys').value.split(',').map(v => v.trim()).filter(v => v);
             const args = document.getElementById('scriptArgs').value.split(',').map(v => v.trim()).filter(v => v);
-            apiCall('POST', '/eval', { script, keys, args });
+            apiCall('POST', '/eval', { script, keys, args }, 'scriptResponse');
         }
 
         // Info
         function ping() {
-            apiCall('GET', '/ping');
+            apiCall('GET', '/ping', null, 'infoResponse');
         }
 
         function info() {
-            apiCall('GET', '/info');
+            apiCall('GET', '/info', null, 'infoResponse');
+        }
+        
+        function testConnection() {
+            showResponse({ message: 'Testing connection to ' + API_BASE + '...' }, false, 'infoResponse');
+            ping();
         }
     </script>
 </body>

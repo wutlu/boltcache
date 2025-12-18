@@ -127,9 +127,29 @@ func (c *BoltCache) Get(key string) (string, bool) {
 func (c *BoltCache) LPush(key string, values ...string) int {
 	val, _ := c.data.LoadOrStore(key, &CacheItem{Value: []string{}, Type: List})
 	item := val.(*CacheItem)
-	list := item.Value.([]string)
+	
+	// Handle type conversion for data loaded from JSON
+	var list []string
+	switch v := item.Value.(type) {
+	case []string:
+		list = v
+	case []interface{}:
+		// Convert from JSON unmarshaling
+		list = make([]string, len(v))
+		for i, val := range v {
+			list[i] = val.(string)
+		}
+	case string:
+		// Single string value, convert to slice
+		list = []string{v}
+	default:
+		// Initialize empty list
+		list = []string{}
+	}
+	
 	list = append(values, list...)
 	item.Value = list
+	item.Type = List
 	c.data.Store(key, item)
 	return len(list)
 }
@@ -143,7 +163,22 @@ func (c *BoltCache) LPop(key string) (string, bool) {
 	if item.Type != List {
 		return "", false
 	}
-	list := item.Value.([]string)
+	
+	// Handle type conversion for data loaded from JSON
+	var list []string
+	switch v := item.Value.(type) {
+	case []string:
+		list = v
+	case []interface{}:
+		// Convert from JSON unmarshaling
+		list = make([]string, len(v))
+		for i, val := range v {
+			list[i] = val.(string)
+		}
+	default:
+		return "", false
+	}
+	
 	if len(list) == 0 {
 		return "", false
 	}
@@ -157,7 +192,23 @@ func (c *BoltCache) LPop(key string) (string, bool) {
 func (c *BoltCache) SAdd(key string, members ...string) int {
 	val, _ := c.data.LoadOrStore(key, &CacheItem{Value: make(map[string]bool), Type: Set})
 	item := val.(*CacheItem)
-	set := item.Value.(map[string]bool)
+	
+	// Handle type conversion for data loaded from JSON
+	var set map[string]bool
+	switch v := item.Value.(type) {
+	case map[string]bool:
+		set = v
+	case map[string]interface{}:
+		// Convert from JSON unmarshaling
+		set = make(map[string]bool)
+		for k, val := range v {
+			set[k] = val.(bool)
+		}
+	default:
+		// Initialize empty set
+		set = make(map[string]bool)
+	}
+	
 	count := 0
 	for _, member := range members {
 		if !set[member] {
@@ -166,6 +217,7 @@ func (c *BoltCache) SAdd(key string, members ...string) int {
 		}
 	}
 	item.Value = set
+	item.Type = Set
 	c.data.Store(key, item)
 	return count
 }
@@ -179,7 +231,22 @@ func (c *BoltCache) SMembers(key string) []string {
 	if item.Type != Set {
 		return []string{}
 	}
-	set := item.Value.(map[string]bool)
+	
+	// Handle type conversion for data loaded from JSON
+	var set map[string]bool
+	switch v := item.Value.(type) {
+	case map[string]bool:
+		set = v
+	case map[string]interface{}:
+		// Convert from JSON unmarshaling
+		set = make(map[string]bool)
+		for k, val := range v {
+			set[k] = val.(bool)
+		}
+	default:
+		return []string{}
+	}
+	
 	members := make([]string, 0, len(set))
 	for member := range set {
 		members = append(members, member)
@@ -191,9 +258,26 @@ func (c *BoltCache) SMembers(key string) []string {
 func (c *BoltCache) HSet(key, field, value string) {
 	val, _ := c.data.LoadOrStore(key, &CacheItem{Value: make(map[string]string), Type: Hash})
 	item := val.(*CacheItem)
-	hash := item.Value.(map[string]string)
+	
+	// Handle type conversion for data loaded from JSON
+	var hash map[string]string
+	switch v := item.Value.(type) {
+	case map[string]string:
+		hash = v
+	case map[string]interface{}:
+		// Convert from JSON unmarshaling
+		hash = make(map[string]string)
+		for k, val := range v {
+			hash[k] = val.(string)
+		}
+	default:
+		// Initialize empty hash
+		hash = make(map[string]string)
+	}
+	
 	hash[field] = value
 	item.Value = hash
+	item.Type = Hash
 	c.data.Store(key, item)
 }
 
@@ -206,7 +290,22 @@ func (c *BoltCache) HGet(key, field string) (string, bool) {
 	if item.Type != Hash {
 		return "", false
 	}
-	hash := item.Value.(map[string]string)
+	
+	// Handle type conversion for data loaded from JSON
+	var hash map[string]string
+	switch v := item.Value.(type) {
+	case map[string]string:
+		hash = v
+	case map[string]interface{}:
+		// Convert from JSON unmarshaling
+		hash = make(map[string]string)
+		for k, val := range v {
+			hash[k] = val.(string)
+		}
+	default:
+		return "", false
+	}
+	
 	value, exists := hash[field]
 	return value, exists
 }
