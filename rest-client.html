@@ -84,7 +84,7 @@
             <h3>Pub/Sub</h3>
             <div>
                 <input type="text" id="channel" placeholder="Channel" />
-                <button onclick="subscribe()">Subscribe (WebSocket)</button>
+                <button id="subscribeBtn" onclick="toggleSubscribe()">Subscribe (WebSocket)</button>
                 <button onclick="disconnect()">Disconnect</button>
             </div>
             <div>
@@ -122,6 +122,7 @@
         const API_BASE = 'http://localhost:8090';
         let ws = null;
         let currentToken = 'dev-token-123';
+        let isSubscribed = false;
 
         function setToken() {
             currentToken = document.getElementById('authToken').value;
@@ -225,8 +226,21 @@
         }
 
         // Pub/Sub
+        function toggleSubscribe() {
+            if (isSubscribed) {
+                disconnect();
+            } else {
+                subscribe();
+            }
+        }
+
         function subscribe() {
             const channel = document.getElementById('channel').value;
+            if (!channel) {
+                showResponse({ error: 'Please enter a channel name' }, true);
+                return;
+            }
+            
             if (ws) ws.close();
             
             ws = new WebSocket(`ws://localhost:8090/subscribe/${channel}`);
@@ -236,7 +250,18 @@
                 messages.scrollTop = messages.scrollHeight;
             };
             ws.onopen = function() {
+                isSubscribed = true;
+                updateSubscribeButton();
                 showResponse({ message: `Subscribed to ${channel}` });
+            };
+            ws.onclose = function() {
+                isSubscribed = false;
+                updateSubscribeButton();
+            };
+            ws.onerror = function(error) {
+                isSubscribed = false;
+                updateSubscribeButton();
+                showResponse({ error: 'WebSocket connection failed' }, true);
             };
         }
 
@@ -244,7 +269,20 @@
             if (ws) {
                 ws.close();
                 ws = null;
+                isSubscribed = false;
+                updateSubscribeButton();
                 showResponse({ message: 'Disconnected' });
+            }
+        }
+
+        function updateSubscribeButton() {
+            const btn = document.getElementById('subscribeBtn');
+            if (isSubscribed) {
+                btn.textContent = 'Subscribed ✓';
+                btn.style.backgroundColor = '#28a745';
+            } else {
+                btn.textContent = 'Subscribe (WebSocket)';
+                btn.style.backgroundColor = '#007cba';
             }
         }
 
