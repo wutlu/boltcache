@@ -1,20 +1,20 @@
 build:
-	go build -o boltcache main-config.go server.go config.go rest.go main.go lua.go
+	go build -o boltcache main-config.go server.go config.go rest.go main.go lua.go resp_gnet.go
 
 run:
-	go mod download && go run main-config.go server.go config.go rest.go main.go lua.go
+	go mod download && go run main-config.go server.go config.go rest.go main.go lua.go resp_gnet.go
 
 run-dev:
-	go mod download && go run main-config.go server.go config.go rest.go main.go lua.go -config config-dev.yaml
+	go mod download && go run main-config.go server.go config.go rest.go main.go lua.go resp_gnet.go -config config-dev.yaml
 
 run-prod:
-	go mod download && go run main-config.go server.go config.go rest.go main.go lua.go -config config-prod.yaml
+	go mod download && go run main-config.go server.go config.go rest.go main.go lua.go resp_gnet.go -config config-prod.yaml
 
 generate-config:
-	go run main-config.go server.go config.go rest.go main.go lua.go -generate-config
+	go run main-config.go server.go config.go rest.go main.go lua.go resp_gnet.go -generate-config
 
 validate-config:
-	go run main-config.go server.go config.go rest.go main.go lua.go -validate -config config.yaml
+	go run main-config.go server.go config.go rest.go main.go lua.go resp_gnet.go -validate -config config.yaml
 
 cluster-master:
 	go run cluster.go cluster node1 6380
