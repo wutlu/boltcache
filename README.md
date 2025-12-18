@@ -75,16 +75,6 @@ GET mykey
 PING
 ```
 
-### Benchmark Testing
-
-```bash
-# Test BoltCache TCP performance
-go run benchmark.go
-
-# Compare with Redis
-redis-benchmark -h localhost -p 6379 -t set,get -n 10000 -c 50
-```
-
 ## 📖 Usage
 
 ### REST API
@@ -264,9 +254,9 @@ make cluster-slave    # Start cluster slave
 
 3. **cURL Scripts**: 
    ```bash
-   ./rest-examples.sh
-   ./auth-examples.sh
-   ./test-pubsub.sh
+   ./examples/rest-examples.sh
+   ./examples/auth-examples.sh
+   ./examples/test-pubsub.sh
    ```
 
 4. **Interactive Client**:

@@ -368,6 +368,11 @@ func (s *RestServer) Start() error {
 		http.ServeFile(w, r, "./rest-client.html")
 	}).Methods("GET")
 
+	// Root endpoint - serve rest-client.html as index
+	r.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "./rest-client.html")
+	}).Methods("GET")
+
 
 
 	addr := ":" + strconv.Itoa(port)

@@ -32,13 +32,13 @@ test-features:
 	go run client.go test
 
 test-rest:
-	chmod +x rest-examples.sh && ./rest-examples.sh
+	chmod +x examples/rest-examples.sh && ./examples/rest-examples.sh
 
 test-auth:
-	chmod +x auth-examples.sh && ./auth-examples.sh
+	chmod +x examples/auth-examples.sh && ./examples/auth-examples.sh
 
 test-pubsub:
-	chmod +x test-pubsub.sh && ./test-pubsub.sh
+	chmod +x examples/test-pubsub.sh && ./examples/test-pubsub.sh
 
 config-help:
 	@echo "Configuration Commands:"

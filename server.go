@@ -49,7 +49,7 @@ func NewServer(configFile string) (*Server, error) {
 func (s *Server) Start() error {
 	log.Printf("Starting BoltCache server...")
 	log.Printf("Mode: %s", s.config.Server.Mode)
-	log.Printf("Features: Lua=%v, PubSub=%v, ComplexTypes=%v", 
+	log.Printf("Features: Lua=%v, PubSub=%v, ComplexTypes=%v",
 		s.config.Features.LuaScripting,
 		s.config.Features.PubSub,
 		s.config.Features.ComplexTypes)
@@ -62,11 +62,16 @@ func (s *Server) Start() error {
 	switch s.config.Server.Mode {
 	case "tcp":
 		go s.startTCPServer()
+		StartGnetServer(s.cache)     // High-performance gnet on port 6381
+		StartRESPGnetServer(s.cache) // RESP gnet (multicore) on port 6382
 	case "rest":
 		go s.startRESTServer()
+		StartRESPGnetServer(s.cache) // RESP gnet (multicore) on port 6382
 	case "both":
 		go s.startTCPServer()
 		go s.startRESTServer()
+		StartGnetServer(s.cache)     // High-performance gnet on port 6381
+		StartRESPGnetServer(s.cache) // RESP gnet (multicore) on port 6382
 	default:
 		return fmt.Errorf("invalid server mode: %s", s.config.Server.Mode)
 	}
@@ -79,7 +84,7 @@ func (s *Server) Start() error {
 	// Wait for shutdown signal
 	<-sigChan
 	log.Println("Shutting down server...")
-	
+
 	// Graceful shutdown
 	s.shutdown()
 	return nil
@@ -88,13 +93,13 @@ func (s *Server) Start() error {
 func (s *Server) startTCPServer() {
 	addr := s.config.GetTCPAddress()
 	log.Printf("TCP server starting on %s", addr)
-	
+
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Fatalf("Failed to start TCP server: %v", err)
 	}
 	defer listener.Close()
-	
+
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -109,7 +114,7 @@ func (s *Server) startRESTServer() {
 	restServer := NewRestServerWithConfig(s.cache, s.config)
 	addr := s.config.GetRESTAddress()
 	log.Printf("REST server starting on %s", addr)
-	
+
 	if err := restServer.Start(); err != nil {
 		log.Fatalf("Failed to start REST server: %v", err)
 	}
@@ -122,13 +127,13 @@ func (s *Server) startMetricsServer() {
 
 func (s *Server) shutdown() {
 	log.Println("Performing graceful shutdown...")
-	
+
 	// Save data if persistence is enabled
 	if s.config.Persistence.Enabled {
 		log.Println("Saving data to disk...")
 		s.cache.forcePersist()
 	}
-	
+
 	log.Println("Shutdown complete")
 }
 
@@ -141,8 +146,8 @@ func applyPerformanceSettings(config *Config) {
 
 	// Set max goroutines (via GOMAXPROCS)
 	if config.Performance.MaxGoroutines > 0 {
-		runtime.GOMAXPROCS(config.Performance.MaxGoroutines)
-		log.Printf("Set GOMAXPROCS to %d", config.Performance.MaxGoroutines)
+		runtime.GOMAXPROCS(runtime.NumCPU())
+		log.Printf("Set GOMAXPROCS to %d", runtime.NumCPU())
 	}
 
 	log.Printf("Applied performance settings")
@@ -151,6 +156,7 @@ func applyPerformanceSettings(config *Config) {
 // Enhanced BoltCache constructor with config
 func NewBoltCacheWithConfig(config *Config) *BoltCache {
 	cache := &BoltCache{
+		data:        NewShardedMap(),
 		persistFile: config.Persistence.File,
 		config:      config,
 	}
@@ -167,7 +173,7 @@ func NewBoltCacheWithConfig(config *Config) *BoltCache {
 
 	// Start background tasks
 	go cache.cleanupExpiredWithConfig()
-	
+
 	if config.Persistence.Enabled {
 		go cache.persistToDiskWithConfig()
 	}
@@ -181,8 +187,8 @@ func NewRestServerWithConfig(cache *BoltCache, config *Config) *RestServer {
 		cache:  cache,
 		config: config,
 		upgrader: websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool { 
-				return config.Server.REST.CORSEnabled 
+			CheckOrigin: func(r *http.Request) bool {
+				return config.Server.REST.CORSEnabled
 			},
 		},
 	}
@@ -194,14 +200,14 @@ func (c *BoltCache) cleanupExpiredWithConfig() {
 	if interval == 0 {
 		interval = time.Minute
 	}
-	
+
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		now := time.Now()
 		expiredKeys := make([]interface{}, 0)
-		
+
 		c.data.Range(func(key, value interface{}) bool {
 			item := value.(*CacheItem)
 			if !item.ExpiresAt.IsZero() && now.After(item.ExpiresAt) {
@@ -211,7 +217,7 @@ func (c *BoltCache) cleanupExpiredWithConfig() {
 		})
 
 		for _, key := range expiredKeys {
-			c.data.Delete(key)
+			c.data.Delete(key.(string))
 		}
 
 		if len(expiredKeys) > 0 {
@@ -270,7 +276,7 @@ func (c *BoltCache) forcePersist() {
 func (c *BoltCache) createBackup() {
 	// Backup implementation
 	backupFile := c.config.Persistence.File + ".backup." + time.Now().Format("20060102-150405")
-	
+
 	if data, err := os.ReadFile(c.config.Persistence.File); err == nil {
 		os.WriteFile(backupFile, data, 0644)
 	}

@@ -2,40 +2,31 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
+
+	"github.com/panjf2000/gnet/v2"
+	"github.com/tidwall/redcon"
 )
 
-type DataType int
-
-const (
-	String DataType = iota
-	List
-	Set
-	Hash
-)
-
+// CacheItem represents an item in the cache
 type CacheItem struct {
 	Value     interface{}
-	Type      DataType
 	ExpiresAt time.Time
 }
 
-type Subscriber struct {
-	Channel chan string
-	Conn    net.Conn
-}
-
+// BoltCache is the main cache structure
 type BoltCache struct {
-	data        sync.Map
+	data        *ShardedMap
 	subscribers sync.Map
 	mu          sync.RWMutex
 	persistFile string
@@ -44,371 +35,304 @@ type BoltCache struct {
 	config      *Config
 }
 
-func NewBoltCache(persistFile string) *BoltCache {
-	cache := &BoltCache{
-		persistFile: persistFile,
+// NewBoltCache creates a new BoltCache instance
+func NewBoltCache(persistFile ...string) *BoltCache {
+	bc := &BoltCache{
+		data: NewShardedMap(),
 	}
-	cache.luaEngine = NewLuaEngine(cache)
-	cache.loadFromDisk()
-	go cache.cleanupExpired()
-	go cache.persistToDisk()
-	return cache
+	if len(persistFile) > 0 {
+		bc.persistFile = persistFile[0]
+	}
+	return bc
 }
 
-func (c *BoltCache) loadFromDisk() {
-	if c.persistFile == "" {
-		return
-	}
-	data, err := os.ReadFile(c.persistFile)
-	if err != nil {
-		return
-	}
-	var items map[string]*CacheItem
-	if err := json.Unmarshal(data, &items); err != nil {
-		return
-	}
-	for k, v := range items {
-		c.data.Store(k, v)
-	}
+// --- ShardedMap Implementation ---
+
+const ShardCount = 2048
+
+type Shard struct {
+	mu    sync.RWMutex
+	items map[string]interface{}
 }
 
-func (c *BoltCache) persistToDisk() {
-	if c.persistFile == "" {
-		return
+type ShardedMap struct {
+	shards []*Shard
+}
+
+func NewShardedMap() *ShardedMap {
+	sm := &ShardedMap{
+		shards: make([]*Shard, ShardCount),
 	}
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	
-	for range ticker.C {
-		items := make(map[string]*CacheItem)
-		c.data.Range(func(key, value interface{}) bool {
-			items[key.(string)] = value.(*CacheItem)
-			return true
-		})
-		
-		data, err := json.Marshal(items)
-		if err != nil {
-			continue
+	for i := 0; i < ShardCount; i++ {
+		sm.shards[i] = &Shard{
+			items: make(map[string]interface{}, 1024),
 		}
-		
-		os.MkdirAll(filepath.Dir(c.persistFile), 0755)
-		os.WriteFile(c.persistFile, data, 0644)
+	}
+	return sm
+}
+
+func (sm *ShardedMap) getShard(key string) *Shard {
+	var h uint32 = 2166136261
+	for i := 0; i < len(key); i++ {
+		h ^= uint32(key[i])
+		h *= 16777619
+	}
+	return sm.shards[h&(ShardCount-1)]
+}
+
+func (sm *ShardedMap) Load(key string) (interface{}, bool) {
+	shard := sm.getShard(key)
+	shard.mu.RLock()
+	val, ok := shard.items[key]
+	shard.mu.RUnlock()
+	return val, ok
+}
+
+func (sm *ShardedMap) Store(key string, value interface{}) {
+	shard := sm.getShard(key)
+	shard.mu.Lock()
+	shard.items[key] = value
+	shard.mu.Unlock()
+}
+
+func (sm *ShardedMap) Delete(key string) {
+	shard := sm.getShard(key)
+	shard.mu.Lock()
+	delete(shard.items, key)
+	shard.mu.Unlock()
+}
+
+func (sm *ShardedMap) Range(f func(key, value interface{}) bool) {
+	for _, shard := range sm.shards {
+		shard.mu.RLock()
+		for k, v := range shard.items {
+			if !f(k, v) {
+				shard.mu.RUnlock()
+				return
+			}
+		}
+		shard.mu.RUnlock()
 	}
 }
 
-func (c *BoltCache) Set(key, value string, ttl time.Duration) {
-	expiresAt := time.Time{}
+// --- BoltCache Methods ---
+
+func (c *BoltCache) Set(key string, value interface{}, ttl time.Duration) {
+	var expiresAt time.Time
 	if ttl > 0 {
 		expiresAt = time.Now().Add(ttl)
 	}
-	c.data.Store(key, &CacheItem{Value: value, Type: String, ExpiresAt: expiresAt})
-	c.replicateCommand(fmt.Sprintf("SET %s %s", key, value))
+
+	item := &CacheItem{
+		Value:     value,
+		ExpiresAt: expiresAt,
+	}
+
+	c.data.Store(key, item)
 }
 
-func (c *BoltCache) Get(key string) (string, bool) {
+func (c *BoltCache) Get(key string) (interface{}, bool) {
 	val, ok := c.data.Load(key)
 	if !ok {
-		return "", false
+		return nil, false
 	}
-	
+
 	item := val.(*CacheItem)
 	if !item.ExpiresAt.IsZero() && time.Now().After(item.ExpiresAt) {
 		c.data.Delete(key)
-		return "", false
+		return nil, false
 	}
-	
-	if item.Type == String {
-		return item.Value.(string), true
-	}
-	return "", false
-}
 
-// List operations
-func (c *BoltCache) LPush(key string, values ...string) int {
-	val, _ := c.data.LoadOrStore(key, &CacheItem{Value: []string{}, Type: List})
-	item := val.(*CacheItem)
-	
-	// Handle type conversion for data loaded from JSON
-	var list []string
-	switch v := item.Value.(type) {
-	case []string:
-		list = v
-	case []interface{}:
-		// Convert from JSON unmarshaling
-		list = make([]string, len(v))
-		for i, val := range v {
-			list[i] = val.(string)
-		}
-	case string:
-		// Single string value, convert to slice
-		list = []string{v}
-	default:
-		// Initialize empty list
-		list = []string{}
-	}
-	
-	list = append(values, list...)
-	item.Value = list
-	item.Type = List
-	c.data.Store(key, item)
-	return len(list)
-}
-
-func (c *BoltCache) LPop(key string) (string, bool) {
-	val, ok := c.data.Load(key)
-	if !ok {
-		return "", false
-	}
-	item := val.(*CacheItem)
-	if item.Type != List {
-		return "", false
-	}
-	
-	// Handle type conversion for data loaded from JSON
-	var list []string
-	switch v := item.Value.(type) {
-	case []string:
-		list = v
-	case []interface{}:
-		// Convert from JSON unmarshaling
-		list = make([]string, len(v))
-		for i, val := range v {
-			list[i] = val.(string)
-		}
-	default:
-		return "", false
-	}
-	
-	if len(list) == 0 {
-		return "", false
-	}
-	result := list[0]
-	item.Value = list[1:]
-	c.data.Store(key, item)
-	return result, true
-}
-
-// Set operations
-func (c *BoltCache) SAdd(key string, members ...string) int {
-	val, _ := c.data.LoadOrStore(key, &CacheItem{Value: make(map[string]bool), Type: Set})
-	item := val.(*CacheItem)
-	
-	// Handle type conversion for data loaded from JSON
-	var set map[string]bool
-	switch v := item.Value.(type) {
-	case map[string]bool:
-		set = v
-	case map[string]interface{}:
-		// Convert from JSON unmarshaling
-		set = make(map[string]bool)
-		for k, val := range v {
-			set[k] = val.(bool)
-		}
-	default:
-		// Initialize empty set
-		set = make(map[string]bool)
-	}
-	
-	count := 0
-	for _, member := range members {
-		if !set[member] {
-			set[member] = true
-			count++
-		}
-	}
-	item.Value = set
-	item.Type = Set
-	c.data.Store(key, item)
-	return count
-}
-
-func (c *BoltCache) SMembers(key string) []string {
-	val, ok := c.data.Load(key)
-	if !ok {
-		return []string{}
-	}
-	item := val.(*CacheItem)
-	if item.Type != Set {
-		return []string{}
-	}
-	
-	// Handle type conversion for data loaded from JSON
-	var set map[string]bool
-	switch v := item.Value.(type) {
-	case map[string]bool:
-		set = v
-	case map[string]interface{}:
-		// Convert from JSON unmarshaling
-		set = make(map[string]bool)
-		for k, val := range v {
-			set[k] = val.(bool)
-		}
-	default:
-		return []string{}
-	}
-	
-	members := make([]string, 0, len(set))
-	for member := range set {
-		members = append(members, member)
-	}
-	return members
-}
-
-// Hash operations
-func (c *BoltCache) HSet(key, field, value string) {
-	val, _ := c.data.LoadOrStore(key, &CacheItem{Value: make(map[string]string), Type: Hash})
-	item := val.(*CacheItem)
-	
-	// Handle type conversion for data loaded from JSON
-	var hash map[string]string
-	switch v := item.Value.(type) {
-	case map[string]string:
-		hash = v
-	case map[string]interface{}:
-		// Convert from JSON unmarshaling
-		hash = make(map[string]string)
-		for k, val := range v {
-			hash[k] = val.(string)
-		}
-	default:
-		// Initialize empty hash
-		hash = make(map[string]string)
-	}
-	
-	hash[field] = value
-	item.Value = hash
-	item.Type = Hash
-	c.data.Store(key, item)
-}
-
-func (c *BoltCache) HGet(key, field string) (string, bool) {
-	val, ok := c.data.Load(key)
-	if !ok {
-		return "", false
-	}
-	item := val.(*CacheItem)
-	if item.Type != Hash {
-		return "", false
-	}
-	
-	// Handle type conversion for data loaded from JSON
-	var hash map[string]string
-	switch v := item.Value.(type) {
-	case map[string]string:
-		hash = v
-	case map[string]interface{}:
-		// Convert from JSON unmarshaling
-		hash = make(map[string]string)
-		for k, val := range v {
-			hash[k] = val.(string)
-		}
-	default:
-		return "", false
-	}
-	
-	value, exists := hash[field]
-	return value, exists
+	return item.Value, true
 }
 
 func (c *BoltCache) Delete(key string) {
 	c.data.Delete(key)
-	c.replicateCommand(fmt.Sprintf("DEL %s", key))
 }
 
+func (c *BoltCache) AddReplica(addr string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.replicas = append(c.replicas, addr)
+}
+
+// List operations
+func (c *BoltCache) LPush(key string, values ...string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var list []string
+	if val, ok := c.Get(key); ok {
+		if l, ok := val.([]string); ok {
+			list = l
+		}
+	}
+
+	list = append(values, list...)
+	c.Set(key, list, 0)
+	return len(list)
+}
+
+func (c *BoltCache) LPop(key string) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if val, ok := c.Get(key); ok {
+		if list, ok := val.([]string); ok && len(list) > 0 {
+			item := list[0]
+			list = list[1:]
+			if len(list) == 0 {
+				c.Delete(key)
+			} else {
+				c.Set(key, list, 0)
+			}
+			return item, true
+		}
+	}
+	return "", false
+}
+
+// Set operations
+func (c *BoltCache) SAdd(key string, members ...string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	set := make(map[string]struct{})
+	if val, ok := c.Get(key); ok {
+		if s, ok := val.(map[string]struct{}); ok {
+			set = s
+		}
+	}
+
+	added := 0
+	for _, m := range members {
+		if _, ok := set[m]; !ok {
+			set[m] = struct{}{}
+			added++
+		}
+	}
+
+	c.Set(key, set, 0)
+	return len(set)
+}
+
+func (c *BoltCache) SMembers(key string) []string {
+	if val, ok := c.Get(key); ok {
+		if set, ok := val.(map[string]struct{}); ok {
+			members := make([]string, 0, len(set))
+			for m := range set {
+				members = append(members, m)
+			}
+			return members
+		}
+	}
+	return nil
+}
+
+// Hash operations
+func (c *BoltCache) HSet(key, field, value string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	hash := make(map[string]string)
+	if val, ok := c.Get(key); ok {
+		if h, ok := val.(map[string]string); ok {
+			hash = h
+		}
+	}
+
+	hash[field] = value
+	c.Set(key, hash, 0)
+}
+
+func (c *BoltCache) HGet(key, field string) (string, bool) {
+	if val, ok := c.Get(key); ok {
+		if hash, ok := val.(map[string]string); ok {
+			v, ok := hash[field]
+			return v, ok
+		}
+	}
+	return "", false
+}
+
+// Pub/Sub
 func (c *BoltCache) Subscribe(channel string, conn net.Conn) {
-	sub := &Subscriber{
-		Channel: make(chan string, 100),
-		Conn:    conn,
-	}
-	
-	val, _ := c.subscribers.LoadOrStore(channel, make([]*Subscriber, 0))
-	subs := val.([]*Subscriber)
-	subs = append(subs, sub)
-	c.subscribers.Store(channel, subs)
-	
-	go func() {
-		for msg := range sub.Channel {
-			fmt.Fprintf(conn, "MESSAGE %s %s\n", channel, msg)
-		}
-	}()
+	conns, _ := c.subscribers.LoadOrStore(channel, &sync.Map{})
+	conns.(*sync.Map).Store(conn, true)
 }
 
-func (c *BoltCache) Publish(channel, message string) int {
-	val, ok := c.subscribers.Load(channel)
-	if !ok {
-		return 0
-	}
-	
-	subs := val.([]*Subscriber)
+func (c *BoltCache) Publish(channel string, message string) int {
 	count := 0
-	for _, sub := range subs {
-		select {
-		case sub.Channel <- message:
+	if conns, ok := c.subscribers.Load(channel); ok {
+		conns.(*sync.Map).Range(func(key, value interface{}) bool {
+			conn := key.(net.Conn)
+			fmt.Fprintf(conn, "MESSAGE %s %s\n", channel, message)
 			count++
-		default:
-			// Skip if channel is full
-		}
+			return true
+		})
 	}
-	c.replicateCommand(fmt.Sprintf("PUBLISH %s %s", channel, message))
 	return count
 }
 
-func (c *BoltCache) AddReplica(address string) {
-	c.replicas = append(c.replicas, address)
-}
-
-func (c *BoltCache) replicateCommand(command string) {
-	for _, replica := range c.replicas {
-		go func(addr string) {
-			conn, err := net.Dial("tcp", addr)
-			if err != nil {
-				return
-			}
-			defer conn.Close()
-			fmt.Fprintln(conn, command)
-		}(replica)
+// Persistence
+func (c *BoltCache) loadFromDisk() {
+	if c.persistFile == "" {
+		return
 	}
-}
 
-func (c *BoltCache) cleanupExpired() {
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-	
-	for range ticker.C {
-		now := time.Now()
-		expiredKeys := make([]interface{}, 0)
-		c.data.Range(func(key, value interface{}) bool {
-			item := value.(*CacheItem)
-			if !item.ExpiresAt.IsZero() && now.After(item.ExpiresAt) {
-				expiredKeys = append(expiredKeys, key)
-			}
-			return true
-		})
-		
-		for _, key := range expiredKeys {
-			c.data.Delete(key)
-		}
-		
-		if len(expiredKeys) > 0 {
-			log.Printf("Cleaned up %d expired keys", len(expiredKeys))
-		}
+	data, err := os.ReadFile(c.persistFile)
+	if err != nil {
+		return
 	}
+
+	var items map[string]*CacheItem
+	if err := json.Unmarshal(data, &items); err != nil {
+		log.Printf("Failed to unmarshal persistence data: %v", err)
+		return
+	}
+
+	for k, v := range items {
+		c.data.Store(k, v)
+	}
+	log.Printf("Loaded %d items from disk", len(items))
 }
 
+// Optimized handleConnection for standard TCP
 func (c *BoltCache) handleConnection(conn net.Conn) {
 	defer conn.Close()
-	scanner := bufio.NewScanner(conn)
-	
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		parts := strings.Fields(line)
-		
+
+	if tc, ok := conn.(*net.TCPConn); ok {
+		tc.SetNoDelay(true)
+	}
+
+	reader := bufio.NewReaderSize(conn, 65536)
+
+	for {
+		line, err := reader.ReadSlice('\n')
+		if err != nil {
+			return
+		}
+
+		n := len(line)
+		if n > 0 && line[n-1] == '\n' {
+			n--
+		}
+		if n > 0 && line[n-1] == '\r' {
+			n--
+		}
+		line = line[:n]
+
+		if n < 4 {
+			continue
+		}
+
+		parts := strings.Fields(string(line))
 		if len(parts) == 0 {
 			continue
 		}
-		
+
 		cmd := strings.ToUpper(parts[0])
-		
+
 		switch cmd {
 		case "SET":
 			if len(parts) >= 3 {
@@ -424,137 +348,362 @@ func (c *BoltCache) handleConnection(conn net.Conn) {
 			} else {
 				fmt.Fprintln(conn, "ERROR: SET key value [ttl]")
 			}
-			
 		case "GET":
 			if len(parts) >= 2 {
 				key := parts[1]
 				if value, ok := c.Get(key); ok {
-					fmt.Fprintf(conn, "VALUE %s\n", value)
+					fmt.Fprintf(conn, "VALUE %v\n", value)
 				} else {
 					fmt.Fprintln(conn, "NIL")
 				}
 			} else {
 				fmt.Fprintln(conn, "ERROR: GET key")
 			}
-			
 		case "DEL":
 			if len(parts) >= 2 {
 				key := parts[1]
 				c.Delete(key)
 				fmt.Fprintln(conn, "OK")
-			} else {
-				fmt.Fprintln(conn, "ERROR: DEL key")
 			}
-			
-		// List operations
-		case "LPUSH":
-			if len(parts) >= 3 {
-				key := parts[1]
-				values := parts[2:]
-				count := c.LPush(key, values...)
-				fmt.Fprintf(conn, "INTEGER %d\n", count)
-			} else {
-				fmt.Fprintln(conn, "ERROR: LPUSH key value [value ...]")
-			}
-			
-		case "LPOP":
-			if len(parts) >= 2 {
-				key := parts[1]
-				if value, ok := c.LPop(key); ok {
-					fmt.Fprintf(conn, "VALUE %s\n", value)
-				} else {
-					fmt.Fprintln(conn, "NIL")
-				}
-			} else {
-				fmt.Fprintln(conn, "ERROR: LPOP key")
-			}
-			
-		// Set operations
-		case "SADD":
-			if len(parts) >= 3 {
-				key := parts[1]
-				members := parts[2:]
-				count := c.SAdd(key, members...)
-				fmt.Fprintf(conn, "INTEGER %d\n", count)
-			} else {
-				fmt.Fprintln(conn, "ERROR: SADD key member [member ...]")
-			}
-			
-		case "SMEMBERS":
-			if len(parts) >= 2 {
-				key := parts[1]
-				members := c.SMembers(key)
-				fmt.Fprintf(conn, "ARRAY %s\n", strings.Join(members, " "))
-			} else {
-				fmt.Fprintln(conn, "ERROR: SMEMBERS key")
-			}
-			
-		// Hash operations
-		case "HSET":
-			if len(parts) >= 4 {
-				key, field, value := parts[1], parts[2], parts[3]
-				c.HSet(key, field, value)
-				fmt.Fprintln(conn, "OK")
-			} else {
-				fmt.Fprintln(conn, "ERROR: HSET key field value")
-			}
-			
-		case "HGET":
-			if len(parts) >= 3 {
-				key, field := parts[1], parts[2]
-				if value, ok := c.HGet(key, field); ok {
-					fmt.Fprintf(conn, "VALUE %s\n", value)
-				} else {
-					fmt.Fprintln(conn, "NIL")
-				}
-			} else {
-				fmt.Fprintln(conn, "ERROR: HGET key field")
-			}
-			
-		case "SUBSCRIBE":
-			if len(parts) >= 2 {
-				channel := parts[1]
-				c.Subscribe(channel, conn)
-				fmt.Fprintf(conn, "SUBSCRIBED %s\n", channel)
-			} else {
-				fmt.Fprintln(conn, "ERROR: SUBSCRIBE channel")
-			}
-			
-		case "PUBLISH":
-			if len(parts) >= 3 {
-				channel, message := parts[1], strings.Join(parts[2:], " ")
-				count := c.Publish(channel, message)
-				fmt.Fprintf(conn, "PUBLISHED %d\n", count)
-			} else {
-				fmt.Fprintln(conn, "ERROR: PUBLISH channel message")
-			}
-			
-		case "EVAL":
-			if len(parts) >= 4 {
-				script := parts[1]
-				numKeys, _ := strconv.Atoi(parts[2])
-				keys := parts[3:3+numKeys]
-				args := parts[3+numKeys:]
-				result := c.luaEngine.Execute(script, keys, args)
-				fmt.Fprintf(conn, "RESULT %s\n", result)
-			} else {
-				fmt.Fprintln(conn, "ERROR: EVAL script numkeys key [key ...] arg [arg ...]")
-			}
-			
-		case "INFO":
-			var count int
-			c.data.Range(func(k, v interface{}) bool {
-				count++
-				return true
-			})
-			fmt.Fprintf(conn, "KEYS %d\nREPLICAS %d\n", count, len(c.replicas))
-			
 		case "PING":
 			fmt.Fprintln(conn, "PONG")
-			
+		case "LPUSH":
+			if len(parts) >= 3 {
+				count := c.LPush(parts[1], parts[2:]...)
+				fmt.Fprintf(conn, "INTEGER %d\n", count)
+			}
+		case "LPOP":
+			if len(parts) >= 2 {
+				if val, ok := c.LPop(parts[1]); ok {
+					fmt.Fprintf(conn, "VALUE %s\n", val)
+				} else {
+					fmt.Fprintln(conn, "NIL")
+				}
+			}
+		case "SADD":
+			if len(parts) >= 3 {
+				count := c.SAdd(parts[1], parts[2:]...)
+				fmt.Fprintf(conn, "INTEGER %d\n", count)
+			}
+		case "SMEMBERS":
+			if len(parts) >= 2 {
+				members := c.SMembers(parts[1])
+				fmt.Fprintf(conn, "ARRAY %s\n", strings.Join(members, " "))
+			}
+		case "HSET":
+			if len(parts) >= 4 {
+				c.HSet(parts[1], parts[2], parts[3])
+				fmt.Fprintln(conn, "OK")
+			}
+		case "HGET":
+			if len(parts) >= 3 {
+				if val, ok := c.HGet(parts[1], parts[2]); ok {
+					fmt.Fprintf(conn, "VALUE %s\n", val)
+				} else {
+					fmt.Fprintln(conn, "NIL")
+				}
+			}
+		case "SUBSCRIBE":
+			if len(parts) >= 2 {
+				c.Subscribe(parts[1], conn)
+				fmt.Fprintf(conn, "SUBSCRIBED %s\n", parts[1])
+			}
+		case "PUBLISH":
+			if len(parts) >= 3 {
+				count := c.Publish(parts[1], strings.Join(parts[2:], " "))
+				fmt.Fprintf(conn, "PUBLISHED %d\n", count)
+			}
+		case "EVAL":
+			if len(parts) >= 4 && c.luaEngine != nil {
+				script := parts[1]
+				numKeys, _ := strconv.Atoi(parts[2])
+				keys := parts[3 : 3+numKeys]
+				args := parts[3+numKeys:]
+				result := c.luaEngine.Execute(script, keys, args)
+				fmt.Fprintf(conn, "RESULT %v\n", result)
+			}
 		default:
 			fmt.Fprintln(conn, "ERROR: Unknown command")
 		}
 	}
 }
 
+// --- gnet Server Implementation ---
+
+type gnetServer struct {
+	gnet.BuiltinEventEngine
+	cache *BoltCache
+}
+
+var (
+	respOK      = []byte("OK\n")
+	respNIL     = []byte("NIL\n")
+	valuePrefix = []byte("VALUE ")
+	newLine     = []byte("\n")
+)
+
+var batchPool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, 0, 65536)
+		return &b
+	},
+}
+
+//go:nosplit
+func b2s(b []byte) string {
+	return unsafe.String(unsafe.SliceData(b), len(b))
+}
+
+func (gs *gnetServer) OnTraffic(c gnet.Conn) gnet.Action {
+	data, _ := c.Next(-1)
+	if len(data) == 0 {
+		return gnet.None
+	}
+
+	batchPtr := batchPool.Get().(*[]byte)
+	batch := *batchPtr
+	batch = batch[:0]
+
+	for len(data) > 0 {
+		idx := bytes.IndexByte(data, '\n')
+		if idx == -1 {
+			break
+		}
+		line := data[:idx]
+		data = data[idx+1:]
+
+		if len(line) > 0 && line[len(line)-1] == '\r' {
+			line = line[:len(line)-1]
+		}
+
+		if len(line) < 4 {
+			continue
+		}
+
+		cmd := line[0] | 0x20
+		if cmd == 's' { // SET
+			rest := line[4:]
+			sp := bytes.IndexByte(rest, ' ')
+			if sp == -1 {
+				continue
+			}
+			key := string(rest[:sp])
+			val := make([]byte, len(rest[sp+1:]))
+			copy(val, rest[sp+1:])
+
+			gs.cache.Set(key, val, 0)
+			batch = append(batch, respOK...)
+		} else if cmd == 'g' { // GET
+			key := b2s(line[4:])
+			val, ok := gs.cache.Get(key)
+			if ok {
+				batch = append(batch, valuePrefix...)
+				switch v := val.(type) {
+				case []byte:
+					batch = append(batch, v...)
+				case string:
+					batch = append(batch, v...)
+				default:
+					batch = append(batch, []byte(fmt.Sprintf("%v", v))...)
+				}
+				batch = append(batch, newLine...)
+			} else {
+				batch = append(batch, respNIL...)
+			}
+		}
+	}
+
+	if len(batch) > 0 {
+		c.Write(batch)
+	}
+	*batchPtr = batch
+	batchPool.Put(batchPtr)
+	return gnet.None
+}
+
+func StartGnetServer(cache *BoltCache) {
+	port := 6381 // Default gnet port
+	if cache.config != nil && cache.config.Server.TCP.Port > 0 {
+		port = cache.config.Server.TCP.Port + 1
+	}
+
+	gs := &gnetServer{cache: cache}
+	go func() {
+		log.Printf("Starting gnet server on port %d", port)
+		err := gnet.Run(gs, fmt.Sprintf("tcp://:%d", port),
+			gnet.WithMulticore(true),
+			gnet.WithTCPNoDelay(gnet.TCPNoDelay),
+			gnet.WithEdgeTriggeredIO(true),
+		)
+		if err != nil {
+			log.Printf("gnet server error: %v", err)
+		}
+	}()
+}
+
+// StartRESPServer starts a Redis-compatible RESP protocol server
+func StartRESPServer(cache *BoltCache) {
+	port := 6382 // RESP server port
+	if cache.config != nil && cache.config.Server.TCP.Port > 0 {
+		port = cache.config.Server.TCP.Port + 2
+	}
+
+	go func() {
+		log.Printf("Starting RESP server (Redis-compatible) on port %d", port)
+
+		addr := fmt.Sprintf(":%d", port)
+		err := redcon.ListenAndServe(addr,
+			func(conn redcon.Conn, cmd redcon.Command) {
+				if len(cmd.Args) == 0 {
+					conn.WriteError("ERR empty command")
+					return
+				}
+
+				command := strings.ToLower(string(cmd.Args[0]))
+
+				switch command {
+				case "ping":
+					conn.WriteString("PONG")
+
+				case "set":
+					if len(cmd.Args) < 3 {
+						conn.WriteError("ERR wrong number of arguments for 'set' command")
+						return
+					}
+					key := string(cmd.Args[1])
+					value := cmd.Args[2]
+					cache.Set(key, value, 0)
+					conn.WriteString("OK")
+
+				case "get":
+					if len(cmd.Args) < 2 {
+						conn.WriteError("ERR wrong number of arguments for 'get' command")
+						return
+					}
+					key := string(cmd.Args[1])
+					if val, ok := cache.Get(key); ok {
+						switch v := val.(type) {
+						case []byte:
+							conn.WriteBulk(v)
+						case string:
+							conn.WriteBulkString(v)
+						default:
+							conn.WriteBulkString(fmt.Sprintf("%v", v))
+						}
+					} else {
+						conn.WriteNull()
+					}
+
+				case "del":
+					if len(cmd.Args) < 2 {
+						conn.WriteError("ERR wrong number of arguments for 'del' command")
+						return
+					}
+					key := string(cmd.Args[1])
+					cache.Delete(key)
+					conn.WriteInt(1)
+
+				case "exists":
+					if len(cmd.Args) < 2 {
+						conn.WriteError("ERR wrong number of arguments for 'exists' command")
+						return
+					}
+					key := string(cmd.Args[1])
+					if _, ok := cache.Get(key); ok {
+						conn.WriteInt(1)
+					} else {
+						conn.WriteInt(0)
+					}
+
+				case "lpush":
+					if len(cmd.Args) < 3 {
+						conn.WriteError("ERR wrong number of arguments for 'lpush' command")
+						return
+					}
+					key := string(cmd.Args[1])
+					values := make([]string, len(cmd.Args)-2)
+					for i, arg := range cmd.Args[2:] {
+						values[i] = string(arg)
+					}
+					count := cache.LPush(key, values...)
+					conn.WriteInt(count)
+
+				case "lpop":
+					if len(cmd.Args) < 2 {
+						conn.WriteError("ERR wrong number of arguments for 'lpop' command")
+						return
+					}
+					key := string(cmd.Args[1])
+					if val, ok := cache.LPop(key); ok {
+						conn.WriteBulkString(val)
+					} else {
+						conn.WriteNull()
+					}
+
+				case "sadd":
+					if len(cmd.Args) < 3 {
+						conn.WriteError("ERR wrong number of arguments for 'sadd' command")
+						return
+					}
+					key := string(cmd.Args[1])
+					members := make([]string, len(cmd.Args)-2)
+					for i, arg := range cmd.Args[2:] {
+						members[i] = string(arg)
+					}
+					count := cache.SAdd(key, members...)
+					conn.WriteInt(count)
+
+				case "smembers":
+					if len(cmd.Args) < 2 {
+						conn.WriteError("ERR wrong number of arguments for 'smembers' command")
+						return
+					}
+					key := string(cmd.Args[1])
+					members := cache.SMembers(key)
+					conn.WriteArray(len(members))
+					for _, m := range members {
+						conn.WriteBulkString(m)
+					}
+
+				case "hset":
+					if len(cmd.Args) < 4 {
+						conn.WriteError("ERR wrong number of arguments for 'hset' command")
+						return
+					}
+					key := string(cmd.Args[1])
+					field := string(cmd.Args[2])
+					value := string(cmd.Args[3])
+					cache.HSet(key, field, value)
+					conn.WriteInt(1)
+
+				case "hget":
+					if len(cmd.Args) < 3 {
+						conn.WriteError("ERR wrong number of arguments for 'hget' command")
+						return
+					}
+					key := string(cmd.Args[1])
+					field := string(cmd.Args[2])
+					if val, ok := cache.HGet(key, field); ok {
+						conn.WriteBulkString(val)
+					} else {
+						conn.WriteNull()
+					}
+
+				default:
+					conn.WriteError("ERR unknown command '" + command + "'")
+				}
+			},
+			func(conn redcon.Conn) bool {
+				// Accept connection
+				return true
+			},
+			func(conn redcon.Conn, err error) {
+				// Connection closed
+			},
+		)
+
+		if err != nil {
+			log.Printf("RESP server error: %v", err)
+		}
+	}()
+}
