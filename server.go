@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -88,9 +89,20 @@ func (s *Server) startTCPServer() {
 	addr := s.config.GetTCPAddress()
 	log.Printf("TCP server starting on %s", addr)
 	
-	// Implementation would go here
-	// For now, just log
-	log.Printf("TCP server would start on %s", addr)
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("Failed to start TCP server: %v", err)
+	}
+	defer listener.Close()
+	
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			log.Printf("Failed to accept connection: %v", err)
+			continue
+		}
+		go s.cache.handleConnection(conn)
+	}
 }
 
 func (s *Server) startRESTServer() {

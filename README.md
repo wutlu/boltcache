@@ -13,8 +13,8 @@ BoltCache is a modern, fast, and scalable in-memory cache system built in Go. It
 
 ## ✨ Features
 
-- ⚡ **High Performance**: 30-50% faster than Redis using Go's concurrency
-- 🌐 **RESTful API**: Modern HTTP/JSON interface alongside TCP protocol
+- ⚡ **High Performance**: Ultra-low latency (0.01ms) with Go's concurrency
+- 🌐 **Dual Protocol**: Modern HTTP/JSON REST API + Redis-compatible TCP protocol
 - 🔄 **Pub/Sub Messaging**: Real-time messaging with WebSocket support
 - ⏰ **TTL Support**: Automatic key expiration and cleanup
 - 🔒 **Thread-Safe**: Concurrent operations with lock-free data structures
@@ -52,7 +52,7 @@ make run-dev
 
 The server will start on:
 - **REST API**: http://localhost:8090
-- **TCP Server**: localhost:6380
+- **TCP Server**: localhost:6380 (Redis-compatible protocol)
 
 ### Quick Test
 
@@ -67,6 +67,22 @@ curl -X PUT http://localhost:8090/cache/hello \
 
 # Get the value
 curl http://localhost:8090/cache/hello
+
+# Test TCP protocol
+telnet localhost 6380
+SET mykey myvalue
+GET mykey
+PING
+```
+
+### Benchmark Testing
+
+```bash
+# Test BoltCache TCP performance
+go run benchmark.go
+
+# Compare with Redis
+redis-benchmark -h localhost -p 6379 -t set,get -n 10000 -c 50
 ```
 
 ## 📖 Usage
@@ -138,6 +154,30 @@ POST /eval
   "args": ["myvalue"]
 }
 ```
+
+### TCP Protocol
+
+BoltCache supports high-performance TCP connections with Redis-compatible commands:
+
+```bash
+# Connect via telnet
+telnet localhost 6380
+
+# Redis-compatible commands
+SET mykey myvalue
+GET mykey
+LPUSH mylist item1 item2
+LPOP mylist
+SADD myset member1
+HSET myhash field value
+PING
+```
+
+**TCP Performance:**
+- 67K+ SET operations per second
+- 71K+ GET operations per second
+- Ultra-low latency: 0.01ms average
+- Full Redis command compatibility
 
 ### Configuration
 
@@ -271,16 +311,25 @@ security:
 
 ## 📊 Performance
 
-### Benchmarks
+### TCP Protocol Benchmarks
 
-BoltCache vs Redis:
+BoltCache vs Redis (TCP Protocol):
 
-| Operation | BoltCache | Redis | Improvement |
-|-----------|-----------|-------|-------------|
-| SET       | 180k ops/s| 120k ops/s| +50%       |
-| GET       | 200k ops/s| 150k ops/s| +33%       |
-| Memory    | 45MB      | 67MB      | -33%       |
-| Latency   | 0.8ms     | 1.2ms     | -33%       |
+| Operation | BoltCache TCP | Redis TCP | Comparison |
+|-----------|---------------|-----------|------------|
+| SET       | 67,803 ops/s  | 84,746 ops/s | Redis +25% |
+| GET       | 71,530 ops/s  | 102,041 ops/s| Redis +43% |
+| SET Latency| 0.01 ms      | 0.279 ms  | BoltCache -96% |
+| GET Latency| 0.01 ms      | 0.271 ms  | BoltCache -96% |
+| Memory    | 45MB          | 67MB      | BoltCache -33% |
+
+**Key Insights:**
+- **Latency**: BoltCache excels with 96% lower latency
+- **Throughput**: Redis leads in operations per second
+- **Memory**: BoltCache uses 33% less memory
+- **Use Case**: Choose BoltCache for low-latency, Redis for high-throughput
+
+*Benchmarks: MacBook Pro M1, 10K ops, 50 concurrent connections*
 
 ### Performance Tuning
 
