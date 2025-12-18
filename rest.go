@@ -245,11 +245,13 @@ func (s *RestServer) ping(w http.ResponseWriter, r *http.Request) {
 // Helper methods
 func (s *RestServer) sendResponse(w http.ResponseWriter, resp CacheResponse) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 	json.NewEncoder(w).Encode(resp)
 }
 
 func (s *RestServer) sendError(w http.ResponseWriter, message string, code int) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(CacheResponse{Success: false, Error: message})
 }
@@ -287,6 +289,25 @@ func (s *RestServer) Start() error {
 	port := s.config.Server.REST.Port
 	r := mux.NewRouter()
 
+	// CORS middleware - EN ÖNCE!
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Token")
+			w.Header().Set("Access-Control-Max-Age", "86400")
+			
+			if r.Method == "OPTIONS" {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
+
+	// Auth middleware (disabled)
+	// r.Use(s.authManager.HTTPMiddleware)
+
 	// String operations
 	r.HandleFunc("/cache/{key}", s.setValue).Methods("PUT")
 	r.HandleFunc("/cache/{key}", s.getValue).Methods("GET")
@@ -316,25 +337,12 @@ func (s *RestServer) Start() error {
 	// r.HandleFunc("/auth/tokens", s.createToken).Methods("POST")
 	// r.HandleFunc("/auth/tokens/{token}", s.deleteToken).Methods("DELETE")
 
+	// Static files
+	r.PathPrefix("/").Handler(http.FileServer(http.Dir("./"))).Methods("GET")
+
 	// Info
 	r.HandleFunc("/info", s.info).Methods("GET")
 	r.HandleFunc("/ping", s.ping).Methods("GET")
-
-	// Auth middleware (disabled)
-	// r.Use(s.authManager.HTTPMiddleware)
-
-	// CORS middleware
-	r.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Token")
-			if r.Method == "OPTIONS" {
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	})
 
 	addr := ":" + strconv.Itoa(port)
 	fmt.Printf("BoltCache REST API started on %s\n", addr)

@@ -201,7 +201,8 @@ make show-config      # Show current config
 # Testing
 make test-rest        # Test REST API
 make test-auth        # Test authentication
-make web-client       # Open web client
+make test-pubsub      # Test Pub/Sub messaging
+# Web client: http://localhost:8090/rest-client.html
 
 # Clustering
 make cluster-master   # Start cluster master
@@ -212,7 +213,11 @@ make cluster-slave    # Start cluster slave
 
 1. **Web Client**: Interactive browser-based client
    ```bash
-   make web-client
+   # Start server
+   make run-dev
+   
+   # Open web client
+   open http://localhost:8090/rest-client.html
    ```
 
 2. **Postman Collection**: Import `BoltCache.postman_collection.json`
@@ -221,6 +226,7 @@ make cluster-slave    # Start cluster slave
    ```bash
    ./rest-examples.sh
    ./auth-examples.sh
+   ./test-pubsub.sh
    ```
 
 4. **Interactive Client**:

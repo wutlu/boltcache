@@ -18,13 +18,14 @@ Modern RESTful cache sistemi - HTTP/JSON ile Redis benzeri operasyonlar.
 go mod download
 
 # REST server başlat
-make run-rest
+make run-dev
 
-# Web client aç
-make web-client
+# Web client aç (browser'da)
+open http://localhost:8090/rest-client.html
 
 # cURL testleri çalıştır
 make test-rest
+make test-pubsub
 ```
 
 ## API Endpoints
@@ -138,8 +139,9 @@ Tüm API yanıtları JSON formatında:
 - ✅ Web browser compatibility
 - ✅ Standard HTTP status codes
 - ✅ JSON format (parse kolay)
-- ✅ CORS support
-- ✅ WebSocket pub/sub
+- ✅ Full CORS support (cross-origin requests)
+- ✅ WebSocket pub/sub with real-time messaging
+- ✅ Built-in web client at /rest-client.html
 - ✅ Existing HTTP tools kullanılabilir
 
 **Redis'e Göre:**

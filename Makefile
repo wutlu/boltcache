@@ -37,6 +37,9 @@ test-rest:
 test-auth:
 	chmod +x auth-examples.sh && ./auth-examples.sh
 
+test-pubsub:
+	chmod +x test-pubsub.sh && ./test-pubsub.sh
+
 config-help:
 	@echo "Configuration Commands:"
 	@echo "  make generate-config  - Generate default config.yaml"
@@ -50,7 +53,9 @@ show-config:
 	cat config.yaml
 
 web-client:
-	open rest-client.html || xdg-open rest-client.html
+	@echo "Web client available at: http://localhost:8090/rest-client.html"
+	@echo "Make sure server is running with: make run-dev"
+	@echo "Then open: http://localhost:8090/rest-client.html"
 
 test:
 	go test ./...
