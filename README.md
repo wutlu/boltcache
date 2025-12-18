@@ -13,7 +13,7 @@ BoltCache is a modern, fast, and scalable in-memory cache system built in Go. It
 
 ## ✨ Features
 
-- ⚡ **High Performance**: Ultra-low latency (0.01ms) with Go's concurrency
+- ⚡ **High Performance**: Optimized for speed with Go's concurrency
 - 🌐 **Dual Protocol**: Modern HTTP/JSON REST API + Redis-compatible TCP protocol
 - 🔄 **Pub/Sub Messaging**: Real-time messaging with WebSocket support
 - ⏰ **TTL Support**: Automatic key expiration and cleanup
@@ -173,11 +173,11 @@ HSET myhash field value
 PING
 ```
 
-**TCP Performance:**
-- 67K+ SET operations per second
-- 71K+ GET operations per second
-- Ultra-low latency: 0.01ms average
+**TCP Features:**
+- High-performance binary protocol
 - Full Redis command compatibility
+- Concurrent connection handling
+- Low-latency operations
 
 ### Configuration
 
@@ -310,26 +310,6 @@ security:
 ```
 
 ## 📊 Performance
-
-### TCP Protocol Benchmarks
-
-BoltCache vs Redis (TCP Protocol):
-
-| Operation | BoltCache TCP | Redis TCP | Comparison |
-|-----------|---------------|-----------|------------|
-| SET       | 67,803 ops/s  | 84,746 ops/s | Redis +25% |
-| GET       | 71,530 ops/s  | 102,041 ops/s| Redis +43% |
-| SET Latency| 0.01 ms      | 0.279 ms  | BoltCache -96% |
-| GET Latency| 0.01 ms      | 0.271 ms  | BoltCache -96% |
-| Memory    | 45MB          | 67MB      | BoltCache -33% |
-
-**Key Insights:**
-- **Latency**: BoltCache excels with 96% lower latency
-- **Throughput**: Redis leads in operations per second
-- **Memory**: BoltCache uses 33% less memory
-- **Use Case**: Choose BoltCache for low-latency, Redis for high-throughput
-
-*Benchmarks: MacBook Pro M1, 10K ops, 50 concurrent connections*
 
 ### Performance Tuning
 
