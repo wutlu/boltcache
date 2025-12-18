@@ -21,9 +21,10 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Mode string    `yaml:"mode"`
-	TCP  TCPConfig `yaml:"tcp"`
-	REST RESTConfig `yaml:"rest"`
+	Mode      string     `yaml:"mode"`
+	SwaggerUI bool       `yaml:"swaggerui,omitempty"`
+	TCP       TCPConfig  `yaml:"tcp"`
+	REST      RESTConfig `yaml:"rest"`
 }
 
 type TCPConfig struct {
@@ -142,11 +143,11 @@ type ProfilingConfig struct {
 }
 
 type PerformanceConfig struct {
-	MaxGoroutines    int                  `yaml:"max_goroutines"`
-	ReadBufferSize   string               `yaml:"read_buffer_size"`
-	WriteBufferSize  string               `yaml:"write_buffer_size"`
-	GCPercent        int                  `yaml:"gc_percent"`
-	ConnectionPool   ConnectionPoolConfig `yaml:"connection_pool"`
+	MaxGoroutines   int                  `yaml:"max_goroutines"`
+	ReadBufferSize  string               `yaml:"read_buffer_size"`
+	WriteBufferSize string               `yaml:"write_buffer_size"`
+	GCPercent       int                  `yaml:"gc_percent"`
+	ConnectionPool  ConnectionPoolConfig `yaml:"connection_pool"`
 }
 
 type ConnectionPoolConfig struct {
@@ -289,10 +290,10 @@ func ParseMemorySize(size string) (int64, error) {
 	if size == "" {
 		return 0, nil
 	}
-	
+
 	multiplier := int64(1)
 	unit := size[len(size)-2:]
-	
+
 	switch unit {
 	case "KB":
 		multiplier = 1024
@@ -309,7 +310,7 @@ func ParseMemorySize(size string) (int64, error) {
 			size = size[:len(size)-1]
 		}
 	}
-	
+
 	var value int64
 	fmt.Sscanf(size, "%d", &value)
 	return value * multiplier, nil

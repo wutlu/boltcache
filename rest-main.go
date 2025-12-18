@@ -2,8 +2,12 @@ package main
 
 import (
 	"flag"
-	"fmt"
+	// "fmt"
 	"os"
+)
+
+import (
+	bcLogger "boltcache/logger"
 )
 
 func main() {
@@ -35,7 +39,7 @@ func main() {
 func startTCPServer(cache *BoltCache) {
 	// Existing TCP server code would go here
 	// For now, just show usage
-	fmt.Println("TCP mode not implemented in this file")
-	fmt.Println("Use: go run main.go lua.go")
+	bcLogger.Log("TCP mode not implemented in this file")
+	bcLogger.Log("Use: go run main.go lua.go")
 	os.Exit(1)
 }

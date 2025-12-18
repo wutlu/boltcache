@@ -7,7 +7,16 @@ import (
 	"os"
 )
 
+import (
+	appinfo "boltcache/appinfo"
+	bcLogger "boltcache/logger"
+)
+
 func main() {
+
+	bcLogger.StartupMessage(appinfo.Version)
+	bcLogger.LoggerConfig.ShowTimestamp = false
+
 	var (
 		configFile = flag.String("config", "config.yaml", "Configuration file path")
 		genConfig  = flag.Bool("generate-config", false, "Generate default configuration file")
@@ -56,6 +65,7 @@ func generateDefaultConfig(filename string) error {
 server:
   # Server mode: tcp, rest, both
   mode: "rest"
+  swaggerui: true
   
   # TCP Server Settings
   tcp:

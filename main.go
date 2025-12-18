@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"log"
+	// "log"
 	"net"
 	"os"
 	"path/filepath"
@@ -12,6 +12,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+)
+
+import (
+	bcLogger "boltcache/logger"
 )
 
 type DataType int
@@ -390,7 +394,7 @@ func (c *BoltCache) cleanupExpired() {
 		}
 		
 		if len(expiredKeys) > 0 {
-			log.Printf("Cleaned up %d expired keys", len(expiredKeys))
+			bcLogger.Log("Cleaned up %d expired keys", len(expiredKeys))
 		}
 	}
 }

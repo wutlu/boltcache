@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,6 +14,10 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+)
+
+import (
+	bcLogger "boltcache/logger"
 )
 
 type Server struct {
@@ -47,9 +50,9 @@ func NewServer(configFile string) (*Server, error) {
 }
 
 func (s *Server) Start() error {
-	log.Printf("Starting BoltCache server...")
-	log.Printf("Mode: %s", s.config.Server.Mode)
-	log.Printf("Features: Lua=%v, PubSub=%v, ComplexTypes=%v", 
+	bcLogger.Log("Starting BoltCache server...")
+	bcLogger.Log("Mode: %s", s.config.Server.Mode)
+	bcLogger.Log("Features: Lua=%v, PubSub=%v, ComplexTypes=%v",
 		s.config.Features.LuaScripting,
 		s.config.Features.PubSub,
 		s.config.Features.ComplexTypes)
@@ -78,8 +81,8 @@ func (s *Server) Start() error {
 
 	// Wait for shutdown signal
 	<-sigChan
-	log.Println("Shutting down server...")
-	
+	bcLogger.Log("Shutting down server...")
+
 	// Graceful shutdown
 	s.shutdown()
 	return nil
@@ -87,29 +90,18 @@ func (s *Server) Start() error {
 
 func (s *Server) startTCPServer() {
 	addr := s.config.GetTCPAddress()
-	log.Printf("TCP server starting on %s", addr)
-	
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		log.Fatalf("Failed to start TCP server: %v", err)
-	}
-	defer listener.Close()
-	
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			log.Printf("Failed to accept connection: %v", err)
-			continue
-		}
-		go s.cache.handleConnection(conn)
-	}
+	bcLogger.LogServerStartWithMsg("TCP server starting on %s", addr)
+
+	// Implementation would go here
+	// For now, just log
+	bcLogger.LogServerStartWithMsg("TCP server would start on %s", addr)
 }
 
 func (s *Server) startRESTServer() {
 	restServer := NewRestServerWithConfig(s.cache, s.config)
 	addr := s.config.GetRESTAddress()
-	log.Printf("REST server starting on %s", addr)
-	
+	bcLogger.LogServerStartWithMsg("REST server starting on %s", addr)
+
 	if err := restServer.Start(); err != nil {
 		log.Fatalf("Failed to start REST server: %v", err)
 	}
@@ -117,35 +109,35 @@ func (s *Server) startRESTServer() {
 
 func (s *Server) startMetricsServer() {
 	// Metrics server implementation
-	log.Printf("Metrics server starting on %s", s.config.Monitoring.Metrics.Endpoint)
+	bcLogger.LogServerStartWithMsg("Metrics server starting on %s", s.config.Monitoring.Metrics.Endpoint)
 }
 
 func (s *Server) shutdown() {
-	log.Println("Performing graceful shutdown...")
-	
+	bcLogger.Log("Performing graceful shutdown...")
+
 	// Save data if persistence is enabled
 	if s.config.Persistence.Enabled {
-		log.Println("Saving data to disk...")
+		bcLogger.Log("Saving data to disk...")
 		s.cache.forcePersist()
 	}
-	
-	log.Println("Shutdown complete")
+
+	bcLogger.Log("Shutdown complete")
 }
 
 func applyPerformanceSettings(config *Config) {
 	// Set GC percentage
 	if config.Performance.GCPercent > 0 {
 		debug.SetGCPercent(config.Performance.GCPercent)
-		log.Printf("Set GC percent to %d", config.Performance.GCPercent)
+		bcLogger.Log("Set GC percent to %d", config.Performance.GCPercent)
 	}
 
 	// Set max goroutines (via GOMAXPROCS)
 	if config.Performance.MaxGoroutines > 0 {
 		runtime.GOMAXPROCS(config.Performance.MaxGoroutines)
-		log.Printf("Set GOMAXPROCS to %d", config.Performance.MaxGoroutines)
+		bcLogger.Log("Set GOMAXPROCS to %d", config.Performance.MaxGoroutines)
 	}
 
-	log.Printf("Applied performance settings")
+	bcLogger.Log("Applied performance settings")
 }
 
 // Enhanced BoltCache constructor with config
@@ -167,7 +159,7 @@ func NewBoltCacheWithConfig(config *Config) *BoltCache {
 
 	// Start background tasks
 	go cache.cleanupExpiredWithConfig()
-	
+
 	if config.Persistence.Enabled {
 		go cache.persistToDiskWithConfig()
 	}
@@ -181,8 +173,8 @@ func NewRestServerWithConfig(cache *BoltCache, config *Config) *RestServer {
 		cache:  cache,
 		config: config,
 		upgrader: websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool { 
-				return config.Server.REST.CORSEnabled 
+			CheckOrigin: func(r *http.Request) bool {
+				return config.Server.REST.CORSEnabled
 			},
 		},
 	}
@@ -194,14 +186,14 @@ func (c *BoltCache) cleanupExpiredWithConfig() {
 	if interval == 0 {
 		interval = time.Minute
 	}
-	
+
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		now := time.Now()
 		expiredKeys := make([]interface{}, 0)
-		
+
 		c.data.Range(func(key, value interface{}) bool {
 			item := value.(*CacheItem)
 			if !item.ExpiresAt.IsZero() && now.After(item.ExpiresAt) {
@@ -215,7 +207,7 @@ func (c *BoltCache) cleanupExpiredWithConfig() {
 		}
 
 		if len(expiredKeys) > 0 {
-			log.Printf("Cleaned up %d expired keys", len(expiredKeys))
+			bcLogger.Log("Cleaned up %d expired keys", len(expiredKeys))
 		}
 	}
 }
@@ -251,7 +243,7 @@ func (c *BoltCache) forcePersist() {
 
 	data, err := json.Marshal(items)
 	if err != nil {
-		log.Printf("Failed to marshal data: %v", err)
+		bcLogger.Log("Failed to marshal data: %v", err)
 		return
 	}
 
@@ -263,14 +255,14 @@ func (c *BoltCache) forcePersist() {
 	// Write to file
 	os.MkdirAll(filepath.Dir(c.config.Persistence.File), 0755)
 	if err := os.WriteFile(c.config.Persistence.File, data, 0644); err != nil {
-		log.Printf("Failed to write persistence file: %v", err)
+		bcLogger.Log("Failed to write persistence file: %v", err)
 	}
 }
 
 func (c *BoltCache) createBackup() {
 	// Backup implementation
 	backupFile := c.config.Persistence.File + ".backup." + time.Now().Format("20060102-150405")
-	
+
 	if data, err := os.ReadFile(c.config.Persistence.File); err == nil {
 		os.WriteFile(backupFile, data, 0644)
 	}

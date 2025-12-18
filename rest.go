@@ -3,7 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	// "log"
 	"net"
 	"net/http"
 	"strconv"
@@ -11,6 +11,12 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
+)
+
+import (
+	appinfo "boltcache/appinfo"
+	bcLogger "boltcache/logger"
+	swaggerui "boltcache/swaggerui"
 )
 
 type RestServer struct {
@@ -168,7 +174,7 @@ func (s *RestServer) subscribe(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Println("WebSocket upgrade failed:", err)
+		bcLogger.Log("WebSocket upgrade failed:", err)
 		return
 	}
 	defer conn.Close()
@@ -227,7 +233,7 @@ func (s *RestServer) info(w http.ResponseWriter, r *http.Request) {
 	info := map[string]interface{}{
 		"keys":     count,
 		"replicas": len(s.cache.replicas),
-		"version":  "1.0.0",
+		"version":  appinfo.Version,
 		"uptime":   time.Now().Format(time.RFC3339),
 	}
 
@@ -239,8 +245,8 @@ func (s *RestServer) listTokens(w http.ResponseWriter, r *http.Request) {
 	// Demo token list since auth is disabled
 	tokens := map[string]interface{}{
 		"dev-token-123": map[string]interface{}{
-			"created_at": "2024-01-01T00:00:00Z",
-			"last_used":  "2024-01-01T12:00:00Z",
+			"created_at":  "2024-01-01T00:00:00Z",
+			"last_used":   "2024-01-01T12:00:00Z",
 			"usage_count": 42,
 		},
 	}
@@ -318,7 +324,7 @@ func (s *RestServer) Start() error {
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-API-Token")
 			w.Header().Set("Access-Control-Max-Age", "86400")
-			
+
 			if r.Method == "OPTIONS" {
 				w.WriteHeader(http.StatusOK)
 				return
@@ -329,6 +335,13 @@ func (s *RestServer) Start() error {
 
 	// Auth middleware (disabled)
 	// r.Use(s.authManager.HTTPMiddleware)
+
+	
+	// Swagger UI
+	if s.config.Server.SwaggerUI {
+		r.HandleFunc("/openapi.json", swaggerui.OpenAPIHandler).Methods("GET")
+		r.HandleFunc("/docs", swaggerui.SwaggerUIHandler).Methods("GET")
+	}
 
 	// String operations
 	r.HandleFunc("/cache/{key}", s.setValue).Methods("PUT")
@@ -368,28 +381,27 @@ func (s *RestServer) Start() error {
 		http.ServeFile(w, r, "./rest-client.html")
 	}).Methods("GET")
 
-
-
 	addr := ":" + strconv.Itoa(port)
-	fmt.Printf("BoltCache REST API started on %s\n", addr)
-	fmt.Println("API Documentation:")
-	fmt.Println("  PUT    /cache/{key}           - Set value")
-	fmt.Println("  GET    /cache/{key}           - Get value")
-	fmt.Println("  DELETE /cache/{key}           - Delete key")
-	fmt.Println("  POST   /list/{key}            - Push to list")
-	fmt.Println("  DELETE /list/{key}            - Pop from list")
-	fmt.Println("  POST   /set/{key}             - Add to set")
-	fmt.Println("  GET    /set/{key}             - Get set members")
-	fmt.Println("  PUT    /hash/{key}/{field}    - Set hash field")
-	fmt.Println("  GET    /hash/{key}/{field}    - Get hash field")
-	fmt.Println("  GET    /subscribe/{channel}   - Subscribe (WebSocket)")
-	fmt.Println("  POST   /publish/{channel}     - Publish message")
-	fmt.Println("  POST   /eval                  - Execute script")
-	fmt.Println("  GET    /auth/tokens           - List tokens")
-	fmt.Println("  POST   /auth/tokens           - Create token")
-	fmt.Println("  DELETE /auth/tokens/{token}   - Delete token")
-	fmt.Println("  GET    /info                  - Server info")
-	fmt.Println("  GET    /ping                  - Health check")
+	bcLogger.LogServerStart(addr)
+
+	fmt.Println("\nAPI Documentation:\n")
+	bcLogger.LogRoute("PUT", "/cache/{key}", "Set value")
+	bcLogger.LogRoute("GET", "/cache/{key}", "Get value")
+	bcLogger.LogRoute("DELETE", "/cache/{key}", "Delete value")
+	bcLogger.LogRoute("POST", "/list/{key}", "Push to list")
+	bcLogger.LogRoute("DELETE", "/list/{key}", "Pop from list")
+	bcLogger.LogRoute("POST", "/set/{key}", "Add to set")
+	bcLogger.LogRoute("GET", "/set/{key}", "Get set members")
+	bcLogger.LogRoute("PUT", "/hash/{key}/{field}", "Set hash field")
+	bcLogger.LogRoute("GET", "/hash/{key}/{field}", "Get hash field")
+	bcLogger.LogRoute("GET", "/subscribe/{channel}", "Subscribe (WebSocket)")
+	bcLogger.LogRoute("POST", "/publish/{channel}", "Publish message")
+	bcLogger.LogRoute("POST", "/eval", "Execute script")
+	bcLogger.LogRoute("GET", "/auth/tokens", "List tokens")
+	bcLogger.LogRoute("POST", "/auth/tokens", "Create token")
+	bcLogger.LogRoute("DELETE", "/auth/tokens/{token}", "Delete token")
+	bcLogger.LogRoute("GET", "/info", "Server info")
+	bcLogger.LogRoute("GET", "/ping", "Health check")
 
 	return http.ListenAndServe(addr, r)
 }

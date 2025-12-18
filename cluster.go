@@ -6,8 +6,11 @@ import (
 	"net"
 	"os"
 	"strconv"
-	"strings"
 	"time"
+)
+
+import (
+	bcLogger "boltcache/logger"
 )
 
 type ClusterNode struct {
@@ -40,7 +43,7 @@ func (n *ClusterNode) Start() {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			log.Println("Failed to accept connection:", err)
+			bcLogger.Log("Failed to accept connection:", err)
 			continue
 		}
 
@@ -51,7 +54,7 @@ func (n *ClusterNode) Start() {
 func (n *ClusterNode) JoinCluster(masterAddr string) {
 	conn, err := net.Dial("tcp", masterAddr)
 	if err != nil {
-		log.Printf("Failed to join cluster: %v", err)
+		bcLogger.Log("Failed to join cluster: %v", err)
 		return
 	}
 	defer conn.Close()
@@ -126,7 +129,7 @@ func main() {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			log.Println("Failed to accept connection:", err)
+			bcLogger.Log("Failed to accept connection:", err)
 			continue
 		}
 

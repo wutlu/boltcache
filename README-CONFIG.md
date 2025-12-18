@@ -40,6 +40,7 @@ go run main-config.go -config /path/to/custom.yaml
 ```yaml
 server:
   mode: "rest"  # tcp, rest, both
+  swaggerui: true # Swagger UI for API exploration
   tcp:
     host: "0.0.0.0"
     port: 6380
