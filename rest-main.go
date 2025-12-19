@@ -13,16 +13,17 @@ import (
 func main() {
 	var (
 		restMode    = flag.Bool("rest", false, "Start REST API server")
-		port        = flag.Int("port", 8080, "REST API port")
 		persistFile = flag.String("persist", "./data/boltcache.json", "Persistence file")
 	)
 	flag.Parse()
 
 	if *restMode {
 		// REST API mode
-		cache := NewBoltCache(*persistFile)
-		server := NewRestServer(cache)
-		server.Start(*port)
+		// cache := NewBoltCache(*persistFile)
+		// server := NewRestServer(cache)
+		// server.Start(*port) // Fixed: Start takes no arguments, but config is missing here.
+		fmt.Println("Please use main-config.go to start the server.")
+		return
 	} else {
 		// TCP mode (existing)
 		cache := NewBoltCache(*persistFile)

@@ -65,11 +65,16 @@ func (s *Server) Start() error {
 	switch s.config.Server.Mode {
 	case "tcp":
 		go s.startTCPServer()
+		StartGnetServer(s.cache)     // High-performance gnet on port 6381
+		StartRESPGnetServer(s.cache) // RESP gnet (multicore) on port 6382
 	case "rest":
 		go s.startRESTServer()
+		StartRESPGnetServer(s.cache) // RESP gnet (multicore) on port 6382
 	case "both":
 		go s.startTCPServer()
 		go s.startRESTServer()
+		StartGnetServer(s.cache)     // High-performance gnet on port 6381
+		StartRESPGnetServer(s.cache) // RESP gnet (multicore) on port 6382
 	default:
 		return fmt.Errorf("invalid server mode: %s", s.config.Server.Mode)
 	}
@@ -90,11 +95,22 @@ func (s *Server) Start() error {
 
 func (s *Server) startTCPServer() {
 	addr := s.config.GetTCPAddress()
-	bcLogger.LogServerStartWithMsg("TCP server starting on %s", addr)
-
-	// Implementation would go here
-	// For now, just log
 	bcLogger.LogServerStartWithMsg("TCP server would start on %s", addr)
+
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("Failed to start TCP server: %v", err)
+	}
+	defer listener.Close()
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			log.Printf("Failed to accept connection: %v", err)
+			continue
+		}
+		go s.cache.handleConnection(conn)
+	}
 }
 
 func (s *Server) startRESTServer() {
@@ -133,8 +149,12 @@ func applyPerformanceSettings(config *Config) {
 
 	// Set max goroutines (via GOMAXPROCS)
 	if config.Performance.MaxGoroutines > 0 {
-		runtime.GOMAXPROCS(config.Performance.MaxGoroutines)
-		bcLogger.Log("Set GOMAXPROCS to %d", config.Performance.MaxGoroutines)
+    // if GOMAXPROCS load in config use this
+// 		runtime.GOMAXPROCS(config.Performance.MaxGoroutines)
+// 		bcLogger.Log("Set GOMAXPROCS to %d", config.Performance.MaxGoroutines)
+    
+		runtime.GOMAXPROCS(runtime.NumCPU())
+		bcLogger.Log("Set GOMAXPROCS to %d", runtime.NumCPU())
 	}
 
 	bcLogger.Log("Applied performance settings")
@@ -143,6 +163,7 @@ func applyPerformanceSettings(config *Config) {
 // Enhanced BoltCache constructor with config
 func NewBoltCacheWithConfig(config *Config) *BoltCache {
 	cache := &BoltCache{
+		data:        NewShardedMap(),
 		persistFile: config.Persistence.File,
 		config:      config,
 	}
@@ -203,7 +224,7 @@ func (c *BoltCache) cleanupExpiredWithConfig() {
 		})
 
 		for _, key := range expiredKeys {
-			c.data.Delete(key)
+			c.data.Delete(key.(string))
 		}
 
 		if len(expiredKeys) > 0 {

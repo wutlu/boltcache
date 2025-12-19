@@ -67,6 +67,12 @@ curl -X PUT http://localhost:8090/cache/hello \
 
 # Get the value
 curl http://localhost:8090/cache/hello
+
+# Test TCP protocol
+telnet localhost 6380
+SET mykey myvalue
+GET mykey
+PING
 ```
 
 ## 📖 Usage
@@ -224,9 +230,9 @@ make cluster-slave    # Start cluster slave
 
 3. **cURL Scripts**: 
    ```bash
-   ./rest-examples.sh
-   ./auth-examples.sh
-   ./test-pubsub.sh
+   ./examples/rest-examples.sh
+   ./examples/auth-examples.sh
+   ./examples/test-pubsub.sh
    ```
 
 4. **Interactive Client**:

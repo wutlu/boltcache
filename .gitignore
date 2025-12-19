@@ -48,3 +48,6 @@ config-local.yaml
 # Backup files
 *.backup.*
 *.bak
+
+# Benchmark tools (development only)
+benchmark/

@@ -4,7 +4,7 @@
 # Server Configuration
 server:
   # Server mode: tcp, rest, both
-  mode: "rest"
+  mode: "both"
   
   # TCP Server Settings
   tcp:
