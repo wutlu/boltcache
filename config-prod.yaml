@@ -20,6 +20,12 @@ persistence:
   interval: "60s"
   compression: true
   backup_count: 5
+
+  # Cleanup starts only when the total number of backup files
+  # exceeds this value.
+  # When triggered, old backups are deleted until only
+  # 'backup_count' newest files remain.
+  cleanup_when_exceeds: 20
   snapshot:
     enabled: true
     interval: "15m"

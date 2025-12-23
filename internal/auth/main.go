@@ -1,4 +1,4 @@
-package main
+package auth
 
 import (
 	"crypto/rand"
@@ -9,24 +9,28 @@ import (
 	"time"
 )
 
+import (
+	config "boltcache/config"
+)
+
 type AuthManager struct {
-	config *Config
+	config *config.Config
 	tokens map[string]*TokenInfo
 }
 
 type TokenInfo struct {
-	Token     string    `json:"token"`
-	CreatedAt time.Time `json:"created_at"`
-	LastUsed  time.Time `json:"last_used"`
-	UsageCount int64    `json:"usage_count"`
+	Token      string    `json:"token"`
+	CreatedAt  time.Time `json:"created_at"`
+	LastUsed   time.Time `json:"last_used"`
+	UsageCount int64     `json:"usage_count"`
 }
 
-func NewAuthManager(config *Config) *AuthManager {
+func NewAuthManager(config *config.Config) *AuthManager {
 	auth := &AuthManager{
 		config: config,
 		tokens: make(map[string]*TokenInfo),
 	}
-	
+
 	// Load configured tokens
 	for _, token := range config.Security.Auth.Tokens {
 		auth.tokens[token] = &TokenInfo{
@@ -35,7 +39,7 @@ func NewAuthManager(config *Config) *AuthManager {
 			LastUsed:  time.Now(),
 		}
 	}
-	
+
 	return auth
 }
 
@@ -43,20 +47,20 @@ func (a *AuthManager) ValidateToken(token string) bool {
 	if !a.config.Security.Auth.Enabled {
 		return true // Auth disabled
 	}
-	
+
 	if token == "" {
 		return false
 	}
-	
+
 	tokenInfo, exists := a.tokens[token]
 	if !exists {
 		return false
 	}
-	
+
 	// Update usage stats
 	tokenInfo.LastUsed = time.Now()
 	tokenInfo.UsageCount++
-	
+
 	return true
 }
 
@@ -89,19 +93,19 @@ func (a *AuthManager) HTTPMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		
+
 		// Skip auth for health/info endpoints
 		if r.URL.Path == "/health" || r.URL.Path == "/ping" {
 			next.ServeHTTP(w, r)
 			return
 		}
-		
+
 		token := a.extractToken(r)
 		if !a.ValidateToken(token) {
 			a.sendAuthError(w)
 			return
 		}
-		
+
 		next.ServeHTTP(w, r)
 	})
 }
@@ -121,17 +125,17 @@ func (a *AuthManager) extractToken(r *http.Request) string {
 		// Direct token
 		return auth
 	}
-	
+
 	// Try X-API-Token header
 	if token := r.Header.Get("X-API-Token"); token != "" {
 		return token
 	}
-	
+
 	// Try query parameter
 	if token := r.URL.Query().Get("token"); token != "" {
 		return token
 	}
-	
+
 	return ""
 }
 

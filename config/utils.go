@@ -1,63 +1,8 @@
-package main
+package config
 
-import (
-	"flag"
-	"fmt"
-	"log"
-	"os"
-)
+import "os"
 
-import (
-	appinfo "boltcache/appinfo"
-	bcLogger "boltcache/logger"
-)
-
-func main() {
-
-	bcLogger.StartupMessage(appinfo.Version)
-	bcLogger.LoggerConfig.ShowTimestamp = false
-
-	var (
-		configFile = flag.String("config", "config.yaml", "Configuration file path")
-		genConfig  = flag.Bool("generate-config", false, "Generate default configuration file")
-		validate   = flag.Bool("validate", false, "Validate configuration file")
-	)
-	flag.Parse()
-
-	// Generate default config
-	if *genConfig {
-		if err := generateDefaultConfig(*configFile); err != nil {
-			log.Fatalf("Failed to generate config: %v", err)
-		}
-		fmt.Printf("Default configuration generated: %s\n", *configFile)
-		return
-	}
-
-	// Validate config
-	if *validate {
-		config, err := LoadConfig(*configFile)
-		if err != nil {
-			log.Fatalf("Failed to load config: %v", err)
-		}
-		if err := config.Validate(); err != nil {
-			log.Fatalf("Invalid config: %v", err)
-		}
-		fmt.Println("Configuration is valid ✅")
-		return
-	}
-
-	// Start server
-	server, err := NewServer(*configFile)
-	if err != nil {
-		log.Fatalf("Failed to create server: %v", err)
-	}
-
-	if err := server.Start(); err != nil {
-		log.Fatalf("Server error: %v", err)
-	}
-}
-
-func generateDefaultConfig(filename string) error {
+func GenerateDefaultConfig(filename string) error {
 	defaultConfig := `# BoltCache Configuration File
 # ============================
 

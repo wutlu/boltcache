@@ -1,45 +1,62 @@
 build:
-	go build -o boltcache main-config.go server.go config.go rest.go main.go lua.go resp_gnet.go
+	go build -o boltcache .
 
+# Run server
 run:
-	go mod download && go run main-config.go server.go config.go rest.go main.go lua.go resp_gnet.go
+	go run . server --config config.yaml
 
 run-dev:
-	go mod download && go run main-config.go server.go config.go rest.go main.go lua.go resp_gnet.go -config config-dev.yaml
+	go run . server --config config-dev.yaml
 
 run-prod:
-	go mod download && go run main-config.go server.go config.go rest.go main.go lua.go resp_gnet.go -config config-prod.yaml
+	go run . server --config config-prod.yaml
 
+# Config management
 generate-config:
-	go run main-config.go server.go config.go rest.go main.go lua.go resp_gnet.go -generate-config
+	go run . config generate
 
 validate-config:
-	go run main-config.go server.go config.go rest.go main.go lua.go resp_gnet.go -validate -config config.yaml
+	go run . config validate --config config.yaml
 
+
+# Cluster nodes
 cluster-master:
-	go run cluster.go cluster node1 6380
+	go run . cluster --node node1 --port 6380
 
 cluster-slave:
-	go run cluster.go cluster node2 6381 :6380
+	go run . cluster --node node2 --port 6381 --replica :6380
 
+
+# Client commands
 client:
-	go run client.go interactive
+	go run . client interactive --addr :6380
 
 benchmark:
-	go run client.go benchmark
+	go run . client benchmark --addr :6380
 
 test-features:
-	go run client.go test
+	go run . client test --addr :6380
+
+
+# Testing scripts
+
+# OLD TEST COMMAND
+# test-rest:
+# 	chmod +x examples/rest-examples.sh && ./examples/rest-examples.sh
 
 test-rest:
-	chmod +x examples/rest-examples.sh && ./examples/rest-examples.sh
+	go test ./internal/server -run TestREST
 
 test-auth:
 	chmod +x examples/auth-examples.sh && ./examples/auth-examples.sh
 
+# test-pubsub:
+# 	chmod +x examples/test-pubsub.sh && ./examples/test-pubsub.sh
 test-pubsub:
-	chmod +x examples/test-pubsub.sh && ./examples/test-pubsub.sh
+	go test ./internal/server -run TestRESTPubSub
 
+
+# Helpers
 config-help:
 	@echo "Configuration Commands:"
 	@echo "  make generate-config  - Generate default config.yaml"
@@ -55,8 +72,8 @@ show-config:
 web-client:
 	@echo "Web client available at: http://localhost:8090/rest-client.html"
 	@echo "Make sure server is running with: make run-dev"
-	@echo "Then open: http://localhost:8090/rest-client.html"
 
+# Tests & Cleanup
 test:
 	go test ./...
 
@@ -64,10 +81,5 @@ clean:
 	rm -f boltcache
 	rm -rf data/
 
-docker-build:
-	docker build -t boltcache .
-
-docker-run:
-	docker run -p 6380:6380 -v $(PWD)/data:/app/data boltcache
-
-.PHONY: build run run-dev run-prod generate-config validate-config config-help show-config cluster-master cluster-slave client benchmark test-features test-rest web-client test clean docker-build docker-run
+# Phony targets
+.PHONY: build run run-dev run-prod generate-config validate-config cluster-master cluster-slave client benchmark test-features test-rest test-auth test-pubsub config-help show-config web-client test clean

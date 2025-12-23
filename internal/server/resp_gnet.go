@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"bytes"
@@ -10,10 +10,15 @@ import (
 	"github.com/panjf2000/gnet/v2"
 )
 
+import (
+	config "boltcache/config"
+	cache "boltcache/internal/cache"
+)
+
 // RESP Protocol Parser for gnet
 type respServer struct {
 	gnet.BuiltinEventEngine
-	cache *BoltCache
+	cache *cache.BoltCache
 }
 
 var (
@@ -157,10 +162,10 @@ func (rs *respServer) OnTraffic(c gnet.Conn) gnet.Action {
 	return gnet.None
 }
 
-func StartRESPGnetServer(cache *BoltCache) {
+func StartRESPGnetServer(cache *cache.BoltCache, cfg *config.Config) {
 	port := 6382
-	if cache.config != nil && cache.config.Server.TCP.Port > 0 {
-		port = cache.config.Server.TCP.Port + 2
+	if cfg != nil && cfg.Server.TCP.Port > 0 {
+		port = cfg.Server.TCP.Port + 2
 	}
 
 	rs := &respServer{cache: cache}

@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"fmt"
@@ -10,7 +10,9 @@ import (
 )
 
 import (
-	bcLogger "boltcache/logger"
+	config "boltcache/config"
+	cache "boltcache/internal/cache"
+	logger "boltcache/logger"
 )
 
 type ClusterNode struct {
@@ -18,7 +20,7 @@ type ClusterNode struct {
 	Address string
 	Port    int
 	Role    string // master, slave
-	cache   *BoltCache
+	Cache *cache.BoltCache
 }
 
 func NewClusterNode(id, address string, port int, role string) *ClusterNode {
@@ -27,11 +29,13 @@ func NewClusterNode(id, address string, port int, role string) *ClusterNode {
 		Address: address,
 		Port:    port,
 		Role:    role,
-		cache:   NewBoltCache(fmt.Sprintf("./data/node_%s.json", id)),
+		Cache:   cache.NewBoltCache(fmt.Sprintf("./data/node_%s.json", id)),
 	}
 }
 
-func (n *ClusterNode) Start() {
+func (n *ClusterNode) Start(cfg *config.Config) {
+
+
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", n.Port))
 	if err != nil {
 		log.Fatal("Failed to start cluster node:", err)
@@ -43,18 +47,18 @@ func (n *ClusterNode) Start() {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			bcLogger.Log("Failed to accept connection:", err)
+			logger.Log("Failed to accept connection: %v", err)
 			continue
 		}
 
-		go n.cache.handleConnection(conn)
+		go handleConnection(conn, n.Cache)
 	}
 }
 
 func (n *ClusterNode) JoinCluster(masterAddr string) {
 	conn, err := net.Dial("tcp", masterAddr)
 	if err != nil {
-		bcLogger.Log("Failed to join cluster: %v", err)
+		logger.Log("Failed to join cluster: %v", err)
 		return
 	}
 	defer conn.Close()
@@ -64,7 +68,7 @@ func (n *ClusterNode) JoinCluster(masterAddr string) {
 }
 
 // Cluster management commands
-func startCluster() {
+func startCluster(cfg *config.Config) {
 	if len(os.Args) < 4 {
 		fmt.Println("Usage: go run . cluster <node-id> <port> [master-address]")
 		return
@@ -72,10 +76,9 @@ func startCluster() {
 
 	nodeID := os.Args[2]
 	port, _ := strconv.Atoi(os.Args[3])
-	
+
 	var role string
 	var masterAddr string
-	
 	if len(os.Args) > 4 {
 		role = "slave"
 		masterAddr = os.Args[4]
@@ -84,55 +87,45 @@ func startCluster() {
 	}
 
 	node := NewClusterNode(nodeID, "localhost", port, role)
-	
+	node.Cache.StartDataCleaner()
+
 	if role == "slave" {
 		go func() {
 			time.Sleep(2 * time.Second)
 			node.JoinCluster(masterAddr)
 		}()
 	}
-	
-	node.Start()
+
+	node.Start(cfg)
 }
 
-func main() {
-	if len(os.Args) > 1 && os.Args[1] == "cluster" {
-		startCluster()
-		return
+func RunClusterCMD(cfg *config.Config, nodeID string, port int, replicas []string) {
+	persistFile := fmt.Sprintf("./data/boltcache_%s.json", nodeID)
+
+	cache := cache.NewBoltCache(persistFile)
+	cache.StartDataCleaner()
+
+	for _, r := range replicas {
+		cache.AddReplica(r)
 	}
 
-	// Normal single node mode
-	persistFile := "./data/boltcache.json"
-	if len(os.Args) > 1 {
-		persistFile = os.Args[1]
-	}
-
-	cache := NewBoltCache(persistFile)
-
-	// Add replicas if specified
-	if len(os.Args) > 2 {
-		for i := 2; i < len(os.Args); i++ {
-			cache.AddReplica(os.Args[i])
-		}
-	}
-
-	listener, err := net.Listen("tcp", ":6380")
+	addr := fmt.Sprintf(":%d", port)
+	listener, err := net.Listen("tcp", addr)
 	if err != nil {
-		log.Fatal("Failed to start server:", err)
+		log.Fatalf("Failed to start server on %s: %v", addr, err)
 	}
 	defer listener.Close()
 
-	fmt.Println("BoltCache server started on :6380")
+	fmt.Printf("BoltCache node %s started on %s\n", nodeID, addr)
 	fmt.Printf("Persistence: %s\n", persistFile)
-	fmt.Printf("Replicas: %v\n", cache.replicas)
+	fmt.Printf("Replicas: %v\n", cache.Replicas)
 
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			bcLogger.Log("Failed to accept connection:", err)
+			logger.Log("Failed to accept connection: %v", err)
 			continue
 		}
-
-		go cache.handleConnection(conn)
+		go handleConnection(conn, cache)
 	}
 }

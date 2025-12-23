@@ -31,7 +31,7 @@ make validate-config
 ### Custom Config
 ```bash
 # Use custom config file
-go run main-config.go -config /path/to/custom.yaml
+go run . server --config /path/to/custom.yaml
 ```
 
 ## Configuration Sections
@@ -206,7 +206,7 @@ request_timeout: "30s"
 make validate-config
 
 # Validate specific config
-go run main-config.go -validate -config config-prod.yaml
+go run . config validate --config config-prod.yaml
 ```
 
 ## Environment Variables
