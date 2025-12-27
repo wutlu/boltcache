@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"sort"
 	"syscall"
 	"time"
 
@@ -285,5 +286,26 @@ func (c *BoltCache) createBackup() {
 
 	if data, err := os.ReadFile(c.config.Persistence.File); err == nil {
 		os.WriteFile(backupFile, data, 0644)
+	}
+
+	// Cleanup old backups
+	pattern := c.config.Persistence.File + ".backup.*"
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return
+	}
+
+	if len(matches) <= c.config.Persistence.BackupCount {
+		return
+	}
+
+	// Sort matching files (names contain timestamps so string sort works)
+	sort.Strings(matches)
+
+	// Delete oldest files
+	toDelete := len(matches) - c.config.Persistence.BackupCount
+	for i := 0; i < toDelete; i++ {
+		os.Remove(matches[i])
+		bcLogger.Log("Removed old backup: %s", matches[i])
 	}
 }
