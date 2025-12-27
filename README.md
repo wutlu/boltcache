@@ -1,5 +1,7 @@
 # BoltCache 🚀
 
+> **Note**: This project was coded by vibe.
+
 **High-performance, Redis-compatible in-memory cache with RESTful API**
 
 BoltCache is a modern, fast, and scalable in-memory cache system built in Go. It provides Redis-like functionality with better performance, RESTful API support, and enterprise-grade features.
@@ -13,7 +15,7 @@ BoltCache is a modern, fast, and scalable in-memory cache system built in Go. It
 
 ## ✨ Features
 
-- ⚡ **High Performance**: 30-50% faster than Redis using Go's concurrency
+- ⚡ **High Performance**: Optimized for write-heavy workloads (up to 2x faster SET operations than Redis)
 - 🌐 **RESTful API**: Modern HTTP/JSON interface alongside TCP protocol
 - 🔄 **Pub/Sub Messaging**: Real-time messaging with WebSocket support
 - ⏰ **TTL Support**: Automatic key expiration and cleanup
@@ -53,6 +55,7 @@ make run-dev
 The server will start on:
 - **REST API**: http://localhost:8090
 - **TCP Server**: localhost:6380
+- **GNet Server**: localhost:6381 (High Performance)
 
 ### Quick Test
 
@@ -279,14 +282,23 @@ security:
 
 ### Benchmarks
 
-BoltCache vs Redis:
+BoltCache outperforms Redis significantly in write-heavy operations, especially when using pipelining.
 
-| Operation | BoltCache | Redis | Improvement |
+**Test Environment**: MacBook Pro M1/M2/M3 (Localhost loopback)
+**Concurrency**: 100 clients, 100,000 operations
+**Pipelining**: Batch size 100
+
+| Operation | BoltCache Ultra | Redis | Improvement |
 |-----------|-----------|-------|-------------|
-| SET       | 180k ops/s| 120k ops/s| +50%       |
-| GET       | 200k ops/s| 150k ops/s| +33%       |
-| Memory    | 45MB      | 67MB      | -33%       |
-| Latency   | 0.8ms     | 1.2ms     | -33%       |
+| **SET** (Standard) | **~75,955 ops/s**| 58,613 ops/s| **1.3x FASTER** 🚀 |
+| **SET** (Pipelined)| **~698,542 ops/s**| 361,009 ops/s| **1.9x FASTER** 🚀 |
+| GET (Standard)    | ~77,301 ops/s | 81,667 ops/s| 0.95x        |
+| GET (Pipelined)   | ~820,683 ops/s | 1,199,741 ops/s| 0.68x      |
+
+> **Benchmark Scripts**:
+> You can verify these results yourself using the provided benchmark tools:
+> - [Standard Benchmark (No Pipeline)](https://gist.github.com/wutlu/addc668b86218d702d9f1ab74605e757)
+> - [Pipelined Benchmark](https://gist.github.com/wutlu/deeb02f4266dd4008135771b8d6d90f9)
 
 ### Performance Tuning
 

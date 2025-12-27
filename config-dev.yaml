@@ -17,6 +17,7 @@ persistence:
   enabled: true
   file: "./data/dev-cache.json"
   interval: "10s"  # More frequent saves in dev
+  backup_count: 2
 
 security:
   auth:
