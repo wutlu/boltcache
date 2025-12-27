@@ -1,4 +1,4 @@
-package main
+package cache
 
 import (
 	"fmt"
@@ -6,8 +6,9 @@ import (
 	"strings"
 )
 
-// Simple Lua-like scripting engine
+
 type LuaEngine struct {
+	// cache cache.API
 	cache *BoltCache
 }
 

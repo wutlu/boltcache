@@ -1,7 +1,7 @@
 # Development Configuration
 server:
   mode: "both"  # Both TCP and REST for development
-  # swaggerui: false # Enable Swagger UI for API exploration
+  swaggerui: true # Enable Swagger UI for API exploration
   tcp:
     port: 6380
   rest:
@@ -18,6 +18,7 @@ persistence:
   file: "./data/dev-cache.json"
   interval: "10s"  # More frequent saves in dev
   backup_count: 2
+  cleanup_when_exceeds: 5
 
 security:
   auth:

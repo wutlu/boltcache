@@ -1,9 +1,8 @@
-package main
+package server
 
 import (
 	"encoding/json"
 	"fmt"
-	// "log"
 	"net"
 	"net/http"
 	"strconv"
@@ -15,13 +14,16 @@ import (
 
 import (
 	appinfo "boltcache/appinfo"
-	bcLogger "boltcache/logger"
+	logger "boltcache/logger"
 	swaggerui "boltcache/swaggerui"
+
+	config "boltcache/config"
+	cache "boltcache/internal/cache"
 )
 
 type RestServer struct {
-	cache    *BoltCache
-	config   *Config
+	cache    *cache.BoltCache
+	config   *config.Config
 	upgrader websocket.Upgrader
 }
 
@@ -37,7 +39,7 @@ type CacheResponse struct {
 	Count   int         `json:"count,omitempty"`
 }
 
-func NewRestServer(cache *BoltCache) *RestServer {
+func NewRestServer(cache *cache.BoltCache) *RestServer {
 	return &RestServer{
 		cache: cache,
 		upgrader: websocket.Upgrader{
@@ -174,7 +176,7 @@ func (s *RestServer) subscribe(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		bcLogger.Log("WebSocket upgrade failed:", err)
+		logger.Log("WebSocket upgrade failed: %v", err)
 		return
 	}
 	defer conn.Close()
@@ -218,21 +220,21 @@ func (s *RestServer) evalScript(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result := s.cache.luaEngine.Execute(req.Script, req.Keys, req.Args)
+	result := s.cache.LuaEngine.Execute(req.Script, req.Keys, req.Args)
 	s.sendResponse(w, CacheResponse{Success: true, Value: result})
 }
 
 // Info endpoint
 func (s *RestServer) info(w http.ResponseWriter, r *http.Request) {
 	var count int
-	s.cache.data.Range(func(k, v interface{}) bool {
+	s.cache.GetData().Range(func(k, v interface{}) bool {
 		count++
 		return true
 	})
 
 	info := map[string]interface{}{
 		"keys":     count,
-		"replicas": len(s.cache.replicas),
+		"replicas": len(s.cache.GetReplicas()),
 		"version":  appinfo.Version,
 		"uptime":   time.Now().Format(time.RFC3339),
 	}
@@ -317,7 +319,7 @@ func (s *RestServer) Start() error {
 	port := s.config.Server.REST.Port
 	r := mux.NewRouter()
 
-	// CORS middleware - EN ÖNCE!
+	// CORS middleware 
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -336,7 +338,6 @@ func (s *RestServer) Start() error {
 	// Auth middleware (disabled)
 	// r.Use(s.authManager.HTTPMiddleware)
 
-	
 	// Swagger UI
 	if s.config.Server.SwaggerUI {
 		r.HandleFunc("/openapi.json", swaggerui.OpenAPIHandler).Methods("GET")
@@ -386,28 +387,27 @@ func (s *RestServer) Start() error {
 		http.ServeFile(w, r, "./rest-client.html")
 	}).Methods("GET")
 
-
 	addr := ":" + strconv.Itoa(port)
-	bcLogger.LogServerStart(addr)
+	logger.LogServerStart(addr)
 
-	fmt.Println("\nAPI Documentation:\n")
-	bcLogger.LogRoute("PUT", "/cache/{key}", "Set value")
-	bcLogger.LogRoute("GET", "/cache/{key}", "Get value")
-	bcLogger.LogRoute("DELETE", "/cache/{key}", "Delete value")
-	bcLogger.LogRoute("POST", "/list/{key}", "Push to list")
-	bcLogger.LogRoute("DELETE", "/list/{key}", "Pop from list")
-	bcLogger.LogRoute("POST", "/set/{key}", "Add to set")
-	bcLogger.LogRoute("GET", "/set/{key}", "Get set members")
-	bcLogger.LogRoute("PUT", "/hash/{key}/{field}", "Set hash field")
-	bcLogger.LogRoute("GET", "/hash/{key}/{field}", "Get hash field")
-	bcLogger.LogRoute("GET", "/subscribe/{channel}", "Subscribe (WebSocket)")
-	bcLogger.LogRoute("POST", "/publish/{channel}", "Publish message")
-	bcLogger.LogRoute("POST", "/eval", "Execute script")
-	bcLogger.LogRoute("GET", "/auth/tokens", "List tokens")
-	bcLogger.LogRoute("POST", "/auth/tokens", "Create token")
-	bcLogger.LogRoute("DELETE", "/auth/tokens/{token}", "Delete token")
-	bcLogger.LogRoute("GET", "/info", "Server info")
-	bcLogger.LogRoute("GET", "/ping", "Health check")
+	fmt.Println("\nAPI Documentation:")
+	logger.LogRoute("PUT", "/cache/{key}", "Set value")
+	logger.LogRoute("GET", "/cache/{key}", "Get value")
+	logger.LogRoute("DELETE", "/cache/{key}", "Delete value")
+	logger.LogRoute("POST", "/list/{key}", "Push to list")
+	logger.LogRoute("DELETE", "/list/{key}", "Pop from list")
+	logger.LogRoute("POST", "/set/{key}", "Add to set")
+	logger.LogRoute("GET", "/set/{key}", "Get set members")
+	logger.LogRoute("PUT", "/hash/{key}/{field}", "Set hash field")
+	logger.LogRoute("GET", "/hash/{key}/{field}", "Get hash field")
+	logger.LogRoute("GET", "/subscribe/{channel}", "Subscribe (WebSocket)")
+	logger.LogRoute("POST", "/publish/{channel}", "Publish message")
+	logger.LogRoute("POST", "/eval", "Execute script")
+	logger.LogRoute("GET", "/auth/tokens", "List tokens")
+	logger.LogRoute("POST", "/auth/tokens", "Create token")
+	logger.LogRoute("DELETE", "/auth/tokens/{token}", "Delete token")
+	logger.LogRoute("GET", "/info", "Server info")
+	logger.LogRoute("GET", "/ping", "Health check")
 
 	return http.ListenAndServe(addr, r)
 }

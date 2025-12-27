@@ -188,7 +188,7 @@ make run-dev
 make run-prod
 
 # Custom config
-go run main-config.go -config custom.yaml
+go run . server --config custom.yaml
 ```
 
 ## 🔧 Development
@@ -240,7 +240,7 @@ make cluster-slave    # Start cluster slave
 
 4. **Interactive Client**:
    ```bash
-   go run client.go interactive
+    go run . client interactive --addr :6380
    ```
 
 ## 🛡️ Security

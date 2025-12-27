@@ -21,14 +21,14 @@ func colorStrip(s string) string {
 }
 
 // StartupMessage prints a stylized startup banner with the application version.
-func StartupMessage(version string) {
+func StartupMessage() {
 	banner := []string{
 		"██████   ██████  ██      ████████  ██████  █████   ██████ ██   ██ ███████ ",
 		"██   ██ ██    ██ ██         ██    ██      ██   ██ ██      ██   ██ ██      ",
 		"██████  ██    ██ ██         ██    ██      ███████ ██      ███████ █████   ",
 		"██   ██ ██    ██ ██         ██    ██      ██   ██ ██      ██   ██ ██      ",
 		"██████   ██████  ███████    ██     ██████ ██   ██  ██████ ██   ██ ███████ ",
-		"",                                                                
+		"",
 	}
 
 	title := appinfo.Title
@@ -40,7 +40,7 @@ func StartupMessage(version string) {
 	versionColor := color.New(color.FgHiYellow, color.Bold)
 	descColor := color.New(color.FgHiBlack)
 
-	titleWithVersion := titleColor.Sprintf("%s", title) + versionColor.Sprintf(" v%s", version)
+	titleWithVersion := titleColor.Sprintf("%s", title) + versionColor.Sprintf(" v%s", appinfo.Version)
 
 	// Calculate max width for the banner
 	maxLen := 0
