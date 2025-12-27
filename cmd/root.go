@@ -2,9 +2,7 @@ package cmd
 
 import (
 	"github.com/spf13/cobra"
-)
 
-import (
 	logger "boltcache/logger"
 )
 
@@ -24,7 +22,7 @@ func Execute() error {
 func init() {
 	logger.StartupMessage()
 
-	rootCmd.PersistentFlags().StringVar(&configFile, "config", "./data/boltcache.json", "Path to configuration file")
+	rootCmd.PersistentFlags().StringVar(&configFile, "config", "config.yaml", "Path to configuration file")
 
 	// Burada tüm subcommand’lar root'a eklenecek
 	rootCmd.AddCommand(serverCmd)
