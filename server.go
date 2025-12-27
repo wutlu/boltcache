@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -14,9 +15,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-)
 
-import (
 	bcLogger "boltcache/logger"
 )
 
@@ -149,10 +148,10 @@ func applyPerformanceSettings(config *Config) {
 
 	// Set max goroutines (via GOMAXPROCS)
 	if config.Performance.MaxGoroutines > 0 {
-    // if GOMAXPROCS load in config use this
-// 		runtime.GOMAXPROCS(config.Performance.MaxGoroutines)
-// 		bcLogger.Log("Set GOMAXPROCS to %d", config.Performance.MaxGoroutines)
-    
+		// if GOMAXPROCS load in config use this
+		// 		runtime.GOMAXPROCS(config.Performance.MaxGoroutines)
+		// 		bcLogger.Log("Set GOMAXPROCS to %d", config.Performance.MaxGoroutines)
+
 		runtime.GOMAXPROCS(runtime.NumCPU())
 		bcLogger.Log("Set GOMAXPROCS to %d", runtime.NumCPU())
 	}

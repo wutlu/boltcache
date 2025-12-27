@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+
 	// "log"
 	"net"
 	"os"
@@ -12,18 +13,15 @@ import (
 	"strings"
 	"sync"
 	"time"
- )
 
-import (
 	bcLogger "boltcache/logger"
-)
-
-type DataType int
 	"unsafe"
 
 	"github.com/panjf2000/gnet/v2"
 	"github.com/tidwall/redcon"
 )
+
+type DataType int
 
 // CacheItem represents an item in the cache
 type CacheItem struct {
@@ -292,10 +290,22 @@ func (c *BoltCache) loadFromDisk() {
 		return
 	}
 
+	var items map[string]*CacheItem
+	if err := json.Unmarshal(data, &items); err != nil {
+		bcLogger.Log("Failed to unmarshal persistence data: %v", err)
+		return
+	}
+
+	for k, v := range items {
+		c.data.Store(k, v)
+	}
+	// log.Printf("Loaded %d items from disk", len(items))
+}
+
 func (c *BoltCache) cleanupExpired() {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
-	
+
 	for range ticker.C {
 		now := time.Now()
 		expiredKeys := make([]interface{}, 0)
@@ -306,24 +316,15 @@ func (c *BoltCache) cleanupExpired() {
 			}
 			return true
 		})
-		
+
 		for _, key := range expiredKeys {
-			c.data.Delete(key)
+			c.data.Delete(key.(string))
 		}
-		
+
 		if len(expiredKeys) > 0 {
 			bcLogger.Log("Cleaned up %d expired keys", len(expiredKeys))
 		}
-	var items map[string]*CacheItem
-	if err := json.Unmarshal(data, &items); err != nil {
-		bcLogger.Log("Failed to unmarshal persistence data: %v", err)
-		return
 	}
-
-	for k, v := range items {
-		c.data.Store(k, v)
-	}
-	log.Printf("Loaded %d items from disk", len(items))
 }
 
 // Optimized handleConnection for standard TCP
@@ -558,14 +559,14 @@ func StartGnetServer(cache *BoltCache) {
 
 	gs := &gnetServer{cache: cache}
 	go func() {
-		log.Printf("Starting gnet server on port %d", port)
+		// log.Printf("Starting gnet server on port %d", port)
 		err := gnet.Run(gs, fmt.Sprintf("tcp://:%d", port),
 			gnet.WithMulticore(true),
 			gnet.WithTCPNoDelay(gnet.TCPNoDelay),
 			gnet.WithEdgeTriggeredIO(true),
 		)
 		if err != nil {
-			log.Printf("gnet server error: %v", err)
+			// log.Printf("gnet server error: %v", err)
 		}
 	}()
 }
@@ -578,7 +579,7 @@ func StartRESPServer(cache *BoltCache) {
 	}
 
 	go func() {
-		log.Printf("Starting RESP server (Redis-compatible) on port %d", port)
+		// log.Printf("Starting RESP server (Redis-compatible) on port %d", port)
 
 		addr := fmt.Sprintf(":%d", port)
 		err := redcon.ListenAndServe(addr,
@@ -732,7 +733,7 @@ func StartRESPServer(cache *BoltCache) {
 		)
 
 		if err != nil {
-			log.Printf("RESP server error: %v", err)
+			// log.Printf("RESP server error: %v", err)
 		}
 	}()
 }
