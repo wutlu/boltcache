@@ -293,7 +293,7 @@ MIT. See [LICENSE](LICENSE).
 - 🐛 Issues: [GitHub Issues](https://github.com/wutlu/boltcache/issues)
 - 📧 Email: alper@is.team
 - 🌐 Website: [alper.vision](https://alper.vision)
-- 💼 LinkedIn: [Alper Mutlu Toksöz](https://linkedin.com/in/wutlu)
+- 💼 LinkedIn: [Alper Mutlu Toksöz](https://linkedin.com/in/alpervision)
 
 ---
 
