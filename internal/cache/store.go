@@ -12,6 +12,7 @@ package cache
 import (
 	"errors"
 	"hash/maphash"
+	"runtime"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -100,6 +101,33 @@ type shard struct {
 	hits   atomic.Uint64
 	misses atomic.Uint64
 	_      [64]byte // keep hot mutexes on separate cache lines
+}
+
+// lockSpins bounds how often lock/rlock retry before blocking. Shard
+// critical sections take well under a microsecond, but sync.RWMutex parks
+// the OS thread after only a few spins; with many event loops hammering one
+// hot key, the futex sleep/wake round trips then dominate. Retrying a little
+// longer first is much cheaper.
+const lockSpins = 100
+
+func (s *shard) lock() {
+	for i := 0; i < lockSpins; i++ {
+		if s.mu.TryLock() {
+			return
+		}
+		runtime.Gosched()
+	}
+	s.mu.Lock()
+}
+
+func (s *shard) rlock() {
+	for i := 0; i < lockSpins; i++ {
+		if s.mu.TryRLock() {
+			return
+		}
+		runtime.Gosched()
+	}
+	s.mu.RLock()
 }
 
 // Stats is a point-in-time view of cache counters.
@@ -281,7 +309,7 @@ func (t *Tx) lockRead(i int) error {
 		}
 		return nil
 	}
-	t.c.shards[i].mu.RLock()
+	t.c.shards[i].rlock()
 	return nil
 }
 
@@ -298,7 +326,7 @@ func (t *Tx) lockWrite(i int) error {
 		}
 		return nil
 	}
-	t.c.shards[i].mu.Lock()
+	t.c.shards[i].lock()
 	return nil
 }
 
@@ -472,7 +500,7 @@ func (c *BoltCache) Atomic(keys []string, all bool, fn func(tx *Tx) error) (err 
 		}
 		tx.held = held
 		for _, i := range held {
-			c.shards[i].mu.Lock()
+			c.shards[i].lock()
 		}
 	}
 
@@ -497,6 +525,10 @@ func (c *BoltCache) Atomic(keys []string, all bool, fn func(tx *Tx) error) (err 
 
 // InAtomic reports whether t is the handle of an Atomic callback.
 func (t *Tx) InAtomic() bool { return t.atomic }
+
+// ShardOf returns the index of the shard holding key; keys with the same
+// index share a lock.
+func (c *BoltCache) ShardOf(key string) int { return c.shardIndex(key) }
 
 // KeyVersion returns a counter that changes whenever key (or another key in
 // the same shard) is modified. Used to implement WATCH.

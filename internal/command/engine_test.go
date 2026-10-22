@@ -574,3 +574,57 @@ func TestSortedSetCommands(t *testing.T) {
 		redis.call('ZINCRBY', KEYS[1], ARGV[1], ARGV[2])
 		return redis.call('ZREVRANK', KEYS[1], ARGV[2])`, "1", "board", "50", "player1")
 }
+
+func TestExecPipelineMatchesSequential(t *testing.T) {
+	script := [][]string{
+		{"SET", "k", "1"}, {"INCR", "k"}, {"INCR", "k"}, {"GET", "k"},
+		{"LPUSH", "k", "x"}, // WRONGTYPE inside a batch
+		{"ZADD", "z", "1", "a"}, {"ZADD", "z", "2", "b"}, {"ZINCRBY", "z", "5", "a"}, {"ZRANGE", "z", "0", "-1", "WITHSCORES"},
+		{"MULTI"}, {"INCR", "k"}, {"GET", "k"}, {"EXEC"},
+		{"NOPE"}, {"GET"}, {"MGET", "k", "z"},
+		{"EVAL", "return redis.call('INCR', KEYS[1])", "1", "k"},
+		{"DEL", "k"}, {"GET", "k"},
+		{"QUIT"}, {"SET", "after", "quit"},
+	}
+	run := func(pipeline bool) []string {
+		h := newHarness(t, Config{})
+		var rec resp.Recorder
+		if pipeline {
+			h.e.ExecPipeline(h.s, script, &rec)
+		} else {
+			for _, c := range script {
+				if h.s.Close {
+					break
+				}
+				h.e.ExecStrings(h.s, c, &rec)
+			}
+		}
+		var out []string
+		for _, v := range rec.Results() {
+			out = append(out, render(v))
+		}
+		if v, _, _ := h.e.Cache().Get("after"); v != "" {
+			t.Errorf("command after QUIT ran (pipeline=%v)", pipeline)
+		}
+		return out
+	}
+	seq, pipe := run(false), run(true)
+	if !reflect.DeepEqual(seq, pipe) {
+		t.Fatalf("pipeline differs:\nseq  %v\npipe %v", seq, pipe)
+	}
+
+	// OOM is still enforced inside a batch.
+	c := cache.New(cache.Options{MaxKeys: 1, EvictionPolicy: cache.PolicyNoEviction})
+	t.Cleanup(c.Close)
+	e := New(c, nil, Config{})
+	var rec resp.Recorder
+	e.ExecPipeline(e.NewSession("t", nil), [][]string{{"SET", "a", "1"}, {"SET", "a", "2"}, {"SET", "a", "3"}}, &rec)
+	_ = c.Set("b", "1", 0) // now over the key limit
+	rec.Reset()
+	e.ExecPipeline(e.NewSession("t", nil), [][]string{{"SET", "a", "x"}, {"SET", "a", "y"}}, &rec)
+	for _, v := range rec.Results() {
+		if v.Kind != resp.KindError || !strings.HasPrefix(v.Str, "OOM") {
+			t.Fatalf("batched write over the limit: %s", render(v))
+		}
+	}
+}

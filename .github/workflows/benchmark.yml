@@ -12,6 +12,10 @@ on:
     paths:
       - bench/**
       - .github/workflows/benchmark.yml
+      # performance-critical code
+      - internal/cache/**
+      - internal/server/proto.go
+      - internal/resp/**
 
 permissions:
   contents: read

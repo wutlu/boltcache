@@ -29,6 +29,51 @@ const (
 	zP        = 0.25
 )
 
+// Nodes and their level arrays are allocated together so following a
+// forward link touches one memory block, not two (most nodes have 1-2
+// levels). This halves cache misses on large sets.
+type zNode1 struct {
+	zNode
+	arr [1]zLevel
+}
+
+type zNode2 struct {
+	zNode
+	arr [2]zLevel
+}
+
+type zNode3 struct {
+	zNode
+	arr [3]zLevel
+}
+
+type zNode4 struct {
+	zNode
+	arr [4]zLevel
+}
+
+func newZNode(member string, score float64, lvl int) *zNode {
+	switch lvl {
+	case 1:
+		n := &zNode1{zNode: zNode{member: member, score: score}}
+		n.level = n.arr[:]
+		return &n.zNode
+	case 2:
+		n := &zNode2{zNode: zNode{member: member, score: score}}
+		n.level = n.arr[:]
+		return &n.zNode
+	case 3:
+		n := &zNode3{zNode: zNode{member: member, score: score}}
+		n.level = n.arr[:]
+		return &n.zNode
+	case 4:
+		n := &zNode4{zNode: zNode{member: member, score: score}}
+		n.level = n.arr[:]
+		return &n.zNode
+	}
+	return &zNode{member: member, score: score, level: make([]zLevel, lvl)}
+}
+
 func newSkiplist() *skiplist {
 	return &skiplist{header: &zNode{level: make([]zLevel, zMaxLevel)}, level: 1}
 }
@@ -70,7 +115,7 @@ func (z *skiplist) insert(score float64, member string) *zNode {
 		}
 		z.level = lvl
 	}
-	n := &zNode{member: member, score: score, level: make([]zLevel, lvl)}
+	n := newZNode(member, score, lvl)
 	for i := 0; i < lvl; i++ {
 		n.level[i].forward = update[i].level[i].forward
 		update[i].level[i].forward = n

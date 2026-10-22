@@ -49,7 +49,7 @@ GET    /keys?pattern=user:*&limit=1000&cursor=0              # paginated key lis
 
 - `value` can be any JSON value; strings are stored as-is, other values as their JSON text.
 - `ttl` is a Go duration (`30s`, `5m`, `2h`). Without it, `cache.default_ttl` applies; `cache.max_ttl` caps it.
-- `GET /cache/{key}` returns strings as strings, lists and sets as arrays and hashes as objects.
+- `GET /cache/{key}` returns strings as strings, lists and sets as arrays, hashes as objects and sorted sets as `[{"member": "ada", "score": 10}, ...]` (lowest score first).
 - `/keys` uses `SCAN`, so it never blocks the server; pass the returned `cursor` to get the next page (`"0"` means done).
 
 ### Lists

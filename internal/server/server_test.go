@@ -762,7 +762,7 @@ func TestSortedSetsEndToEnd(t *testing.T) {
 	if r := rdb.ZRank(ctx, "board", "cy").Val(); r != 1 {
 		t.Fatalf("rank = %d", r)
 	}
-	byScore := rdb.ZRangeByScore(ctx, "board", &redis.ZRangeBy{Min: "(100", Max: "+inf"}).Val()
+	byScore := rdb.ZRangeArgs(ctx, redis.ZRangeArgs{Key: "board", Start: "(100", Stop: "+inf", ByScore: true}).Val()
 	if strings.Join(byScore, ",") != "cy,bob" {
 		t.Fatalf("byscore = %v", byScore)
 	}

@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [2.1.0] - 2026-10-22
+
+### Added
+
+- **Sorted sets**: `ZADD` (NX/XX/GT/LT/CH/INCR), `ZINCRBY`, `ZSCORE`, `ZMSCORE`, `ZCARD`, `ZCOUNT`, `ZRANK`/`ZREVRANK` (WITHSCORE), `ZREM`, `ZRANGE` (BYSCORE/REV/LIMIT/WITHSCORES), `ZREVRANGE`, `ZRANGEBYSCORE`, `ZREVRANGEBYSCORE`, `ZPOPMIN`/`ZPOPMAX`, `ZREMRANGEBYRANK`/`ZREMRANGEBYSCORE` and `ZSCAN`. They're backed by a skiplist with O(log n) ranks, persisted in snapshots, filterable with `SCAN ... TYPE zset` and returned by `GET /cache/{key}`.
+- **Reproducible benchmarks**: `bench/run.sh` compares BoltCache with Redis (with and without I/O threads), Valkey and Dragonfly under the same pinned CPU budget, and a GitHub Actions workflow runs it. Results and methodology are in [BENCHMARKS.md](BENCHMARKS.md).
+- README sections on project status, when (not) to use BoltCache with a comparison to Redis/Valkey, Dragonfly, NATS and etcd, and how the project is built and verified.
+- Issue templates; private vulnerability reporting is enabled.
+
+### Changed
+
+- Performance claims in the README now come only from the reproducible benchmark.
+
 ## [2.0.1] - 2026-10-22
 
 ### Fixed
@@ -67,6 +80,7 @@ BoltCache 2.0 is a ground-up rework of the engine, the network layer and the too
 
 Initial release.
 
+[2.1.0]: https://github.com/wutlu/boltcache/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/wutlu/boltcache/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/wutlu/boltcache/compare/e6a00dc...v2.0.0
 [1.0.0]: https://github.com/wutlu/boltcache/commit/f13537c
