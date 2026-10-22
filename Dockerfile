@@ -13,7 +13,7 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
-      -ldflags "-s -w -X github.com/wutlu/boltcache/appinfo.Version=${VERSION} -X github.com/wutlu/boltcache/appinfo.Commit=${COMMIT}" \
+      -ldflags "-s -w -X github.com/wutlu/boltcache/v2/appinfo.Version=${VERSION} -X github.com/wutlu/boltcache/v2/appinfo.Commit=${COMMIT}" \
       -o /out/boltcache . \
  && mkdir -p /out/data
 

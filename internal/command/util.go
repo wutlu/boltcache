@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/wutlu/boltcache/internal/resp"
+	"github.com/wutlu/boltcache/v2/internal/resp"
 )
 
 const (

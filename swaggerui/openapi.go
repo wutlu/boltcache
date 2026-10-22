@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/wutlu/boltcache/appinfo"
+	"github.com/wutlu/boltcache/v2/appinfo"
 )
 
 type APIRoute struct {

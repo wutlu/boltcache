@@ -8,9 +8,9 @@ import (
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 
-	"github.com/wutlu/boltcache/config"
-	"github.com/wutlu/boltcache/internal/server"
-	"github.com/wutlu/boltcache/logger"
+	"github.com/wutlu/boltcache/v2/config"
+	"github.com/wutlu/boltcache/v2/internal/server"
+	"github.com/wutlu/boltcache/v2/logger"
 )
 
 var serverCmd = &cobra.Command{

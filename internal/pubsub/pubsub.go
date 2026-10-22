@@ -10,7 +10,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/wutlu/boltcache/internal/glob"
+	"github.com/wutlu/boltcache/v2/internal/glob"
 )
 
 // Subscriber receives published messages. Deliver must not block.

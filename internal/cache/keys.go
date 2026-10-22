@@ -5,7 +5,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/wutlu/boltcache/internal/glob"
+	"github.com/wutlu/boltcache/v2/internal/glob"
 )
 
 // Delete removes key and reports whether it existed.

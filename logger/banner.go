@@ -7,7 +7,7 @@ import (
 	"github.com/fatih/color"
 	"github.com/mattn/go-runewidth"
 
-	"github.com/wutlu/boltcache/appinfo"
+	"github.com/wutlu/boltcache/v2/appinfo"
 )
 
 var ansi = regexp.MustCompile(`\x1b\[[0-9;]*m`)

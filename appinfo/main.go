@@ -13,7 +13,7 @@ var (
 	Description = "A lightweight, high-performance in-memory caching server written in Go."
 
 	// Version, Commit and Date are set at build time with
-	//   -ldflags "-X github.com/wutlu/boltcache/appinfo.Version=2.0.0 ..."
+	//   -ldflags "-X github.com/wutlu/boltcache/v2/appinfo.Version=2.0.0 ..."
 	Version = "2.0.0"
 	Commit  = ""
 	Date    = ""
@@ -22,7 +22,7 @@ var (
 )
 
 func init() {
-	// `go install github.com/wutlu/boltcache@vX` builds carry the module
+	// `go install github.com/wutlu/boltcache/v2@vX` builds carry the module
 	// version and VCS info in the binary.
 	info, ok := debug.ReadBuildInfo()
 	if !ok {

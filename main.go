@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/wutlu/boltcache/cmd"
+	"github.com/wutlu/boltcache/v2/cmd"
 )
 
 func main() {

@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/wutlu/boltcache/config"
+	"github.com/wutlu/boltcache/v2/config"
 )
 
 // Setup builds a logger from the logging configuration and installs it as

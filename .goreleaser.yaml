@@ -18,9 +18,9 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
-      - -X github.com/wutlu/boltcache/appinfo.Version={{ .Version }}
-      - -X github.com/wutlu/boltcache/appinfo.Commit={{ .Commit }}
-      - -X github.com/wutlu/boltcache/appinfo.Date={{ .Date }}
+      - -X github.com/wutlu/boltcache/v2/appinfo.Version={{ .Version }}
+      - -X github.com/wutlu/boltcache/v2/appinfo.Commit={{ .Commit }}
+      - -X github.com/wutlu/boltcache/v2/appinfo.Date={{ .Date }}
 
 archives:
   - formats: [tar.gz]
@@ -38,8 +38,8 @@ archives:
 checksum:
   name_template: checksums.txt
 
-changelog:
-  disable: true
+# Release notes come from CHANGELOG.md (--release-notes in release.yml).
+# Note: "changelog: disable: true" would make GoReleaser drop them too.
 
 release:
   draft: false

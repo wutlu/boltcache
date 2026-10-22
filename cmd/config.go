@@ -8,8 +8,8 @@ import (
 	"github.com/spf13/cobra"
 	"go.yaml.in/yaml/v3"
 
-	"github.com/wutlu/boltcache/appinfo"
-	"github.com/wutlu/boltcache/config"
+	"github.com/wutlu/boltcache/v2/appinfo"
+	"github.com/wutlu/boltcache/v2/config"
 )
 
 var forceGenerate bool

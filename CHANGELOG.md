@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [2.0.1] - 2026-10-22
+
+### Fixed
+
+- `go install github.com/wutlu/boltcache/v2@latest` works: Go requires a `/v2` suffix in the module path of v2+ releases, so the module path is now `github.com/wutlu/boltcache/v2`.
+- Release notes are included in GitHub releases again.
+
 ## [2.0.0] - 2026-10-22
 
 BoltCache 2.0 is a ground-up rework of the engine, the network layer and the tooling. It is now a real Redis-compatible server: `redis-cli`, `redis-benchmark`, go-redis and other clients work against it, with real Lua scripting, transactions, eviction and crash-safe persistence. It is also about **2x faster** than 1.0 and outperforms Redis 8.4 on a multi-core machine in `redis-benchmark` (see the README for numbers and methodology).
@@ -15,7 +22,7 @@ BoltCache 2.0 is a ground-up rework of the engine, the network layer and the too
 - **Crash-safe, typed persistence**: snapshots keep value types and binary data, are written atomically (temp file + fsync + rename), can be gzipped and are skipped when nothing changed. 1.x snapshots are converted automatically.
 - **Security**: token authentication is enforced on REST, RESP and TCP; CORS allow-list (also for WebSockets) with CSRF protection, per-IP rate limiting, request size limits (strict ones for unauthenticated clients), HTTPS for the REST API, constant-time token checks, sandboxed Lua.
 - **Observability**: Prometheus `/metrics`, `/health` and `/ready`, structured logging with `log/slog` (text/JSON), optional pprof.
-- **Distribution**: prebuilt binaries for Linux, macOS, Windows and FreeBSD (amd64/arm64), multi-arch distroless images on `ghcr.io/wutlu/boltcache`, `go install github.com/wutlu/boltcache@latest`.
+- **Distribution**: prebuilt binaries for Linux, macOS, Windows and FreeBSD (amd64/arm64), multi-arch distroless images on `ghcr.io/wutlu/boltcache`, `go install github.com/wutlu/boltcache/v2@latest` (from 2.0.1).
 
 ### Added
 
@@ -46,7 +53,7 @@ BoltCache 2.0 is a ground-up rework of the engine, the network layer and the too
 
 ### Changed
 
-- **Breaking**: the Go module path is `github.com/wutlu/boltcache` and Go 1.26 or newer is required to build.
+- **Breaking**: the Go module path is `github.com/wutlu/boltcache/v2` (from 2.0.1) and Go 1.26 or newer is required to build.
 - **Breaking**: authentication is enforced when `security.auth.enabled` is true (see above).
 - **Breaking**: writing a different type to an existing key returns `WRONGTYPE` instead of silently replacing it, and replies follow Redis (e.g. `HSET` returns the number of new fields, `DEL` the number of deleted keys).
 - **Breaking**: the separate gnet text listener on `tcp.port + 1` (6381) was removed; port 6380 now runs on gnet and serves both protocols.
@@ -60,5 +67,6 @@ BoltCache 2.0 is a ground-up rework of the engine, the network layer and the too
 
 Initial release.
 
+[2.0.1]: https://github.com/wutlu/boltcache/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/wutlu/boltcache/compare/e6a00dc...v2.0.0
 [1.0.0]: https://github.com/wutlu/boltcache/commit/f13537c

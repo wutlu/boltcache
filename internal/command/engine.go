@@ -10,9 +10,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/wutlu/boltcache/internal/cache"
-	"github.com/wutlu/boltcache/internal/pubsub"
-	"github.com/wutlu/boltcache/internal/resp"
+	"github.com/wutlu/boltcache/v2/internal/cache"
+	"github.com/wutlu/boltcache/v2/internal/pubsub"
+	"github.com/wutlu/boltcache/v2/internal/resp"
 )
 
 // Authenticator validates AUTH passwords (API tokens).

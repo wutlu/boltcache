@@ -16,7 +16,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/wutlu/boltcache/internal/resp"
+	"github.com/wutlu/boltcache/v2/internal/resp"
 )
 
 var (

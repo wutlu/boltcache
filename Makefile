@@ -1,5 +1,5 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//')
-LDFLAGS := -s -w -X github.com/wutlu/boltcache/appinfo.Version=$(VERSION)
+LDFLAGS := -s -w -X github.com/wutlu/boltcache/v2/appinfo.Version=$(VERSION)
 CONFIG  ?= config.yaml
 
 .PHONY: help build run run-dev run-prod test test-race fuzz bench lint vet \

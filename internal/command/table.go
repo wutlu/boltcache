@@ -4,8 +4,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/wutlu/boltcache/internal/cache"
-	"github.com/wutlu/boltcache/internal/resp"
+	"github.com/wutlu/boltcache/v2/internal/cache"
+	"github.com/wutlu/boltcache/v2/internal/resp"
 )
 
 type handler func(e *Engine, s *Session, db *cache.Tx, args []string, w resp.Writer)

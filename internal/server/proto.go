@@ -12,8 +12,8 @@ import (
 	"github.com/panjf2000/gnet/v2"
 	"github.com/panjf2000/gnet/v2/pkg/logging"
 
-	"github.com/wutlu/boltcache/internal/command"
-	"github.com/wutlu/boltcache/internal/resp"
+	"github.com/wutlu/boltcache/v2/internal/command"
+	"github.com/wutlu/boltcache/v2/internal/resp"
 )
 
 // maxPendingPush is the most pub/sub output that may queue for one
