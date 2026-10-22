@@ -1,29 +1,33 @@
-# Development Configuration
+# Development configuration: everything enabled, auth on with fixed tokens.
+#   make run-dev
+#   redis-cli -p 6382 -a dev-token-123
+#   curl -H "Authorization: Bearer dev-token-123" localhost:8090/info
 server:
-  mode: "both"  # Both TCP and REST for development
-  swaggerui: true # Enable Swagger UI for API exploration
+  mode: "both"
+  swaggerui: true
   tcp:
     port: 6380
+  resp:
+    port: 6382
   rest:
     port: 8090
     cors_enabled: true
 
 cache:
   max_memory: "512MB"
-  cleanup_interval: "30s"
   eviction_policy: "lru"
+  cleanup_interval: "30s"
 
 persistence:
   enabled: true
   file: "./data/dev-cache.json"
-  interval: "10s"  # More frequent saves in dev
+  interval: "10s"
   backup_count: 2
   cleanup_when_exceeds: 5
 
 security:
   auth:
     enabled: true
-    method: "token"
     tokens:
       - "dev-token-123"
       - "test-token-456"
@@ -31,9 +35,11 @@ security:
 logging:
   level: "debug"
   format: "text"
-  file: "./logs/dev.log"
+
+monitoring:
+  profiling:
+    enabled: true
 
 features:
   lua_scripting: true
   pub_sub: true
-  complex_types: true

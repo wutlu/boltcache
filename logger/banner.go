@@ -3,15 +3,11 @@ package logger
 import (
 	"regexp"
 	"strings"
-)
 
-import (
 	"github.com/fatih/color"
 	"github.com/mattn/go-runewidth"
-)
 
-import (
-	appinfo "boltcache/appinfo"
+	"github.com/wutlu/boltcache/appinfo"
 )
 
 var ansi = regexp.MustCompile(`\x1b\[[0-9;]*m`)

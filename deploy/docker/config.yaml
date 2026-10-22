@@ -1,0 +1,33 @@
+# Configuration baked into the Docker image. Override settings with
+# environment variables or mount your own file at /etc/boltcache/config.yaml.
+server:
+  mode: "both"
+  swaggerui: true
+  tcp:
+    host: "0.0.0.0"
+    port: 6380
+  resp:
+    port: 6382
+  rest:
+    host: "0.0.0.0"
+    port: 8090
+    cors_origins: ["${BOLTCACHE_CORS_ORIGIN:-*}"]
+
+cache:
+  max_memory: "${BOLTCACHE_MAX_MEMORY:-0}"
+  eviction_policy: "${BOLTCACHE_EVICTION_POLICY:-lru}"
+
+persistence:
+  enabled: ${BOLTCACHE_PERSISTENCE:-true}
+  file: "/data/boltcache.json"
+  interval: "30s"
+
+security:
+  auth:
+    # docker run -e BOLTCACHE_AUTH=true -e BOLTCACHE_TOKEN=change-me ...
+    enabled: ${BOLTCACHE_AUTH:-false}
+    tokens: ["${BOLTCACHE_TOKEN:-}"]
+
+logging:
+  level: "${BOLTCACHE_LOG_LEVEL:-info}"
+  format: "${BOLTCACHE_LOG_FORMAT:-json}"

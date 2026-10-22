@@ -1,0 +1,91 @@
+# BoltCache configuration
+# =======================
+# Every setting is optional; omitted settings use the defaults shown here.
+# ${VAR} and ${VAR:-default} are replaced with environment variables, e.g.
+#   tokens: ["${BOLTCACHE_TOKEN}"]
+
+server:
+  # tcp  = TCP + RESP listeners
+  # rest = HTTP API + RESP listener
+  # both = everything
+  mode: "both"
+  swaggerui: true            # serve /docs and /openapi.json
+
+  # Legacy text protocol ("SET k v" -> "OK"). It also auto-detects RESP, so
+  # redis-cli -p 6380 works too.
+  tcp:
+    host: "0.0.0.0"
+    port: 6380
+    max_connections: 10000
+
+  # Redis-compatible listener for redis-cli, go-redis, ioredis, redis-py...
+  resp:
+    enabled: true
+    port: 6382
+
+  rest:
+    host: "0.0.0.0"
+    port: 8090
+    cors_enabled: true
+    cors_origins: ["*"]      # list allowed origins in production
+    request_timeout: "30s"
+    max_request_size: "10MB"
+
+cache:
+  max_memory: "0"            # e.g. "1GB"; 0 = unlimited (approximate accounting)
+  max_keys: 0                # 0 = unlimited
+  # What happens when a limit is reached:
+  #   lru | lfu | random | ttl -> evict keys using that policy
+  #   noeviction               -> reject writes with an OOM error
+  eviction_policy: "lru"
+  eviction_threshold: 1.0    # start evicting at this fraction of max_memory
+  default_ttl: "0s"          # TTL applied by the REST API when none is given
+  max_ttl: "0s"              # upper bound for REST API TTLs (0 = none)
+  cleanup_interval: "1m"     # active expiry sweep (expired keys are never served)
+
+persistence:
+  enabled: true
+  file: "./data/boltcache.json"
+  interval: "30s"            # snapshots are skipped when nothing changed
+  compression: false         # gzip snapshots
+  backup_count: 3            # previous snapshots kept as <file>.backup.<time>
+  cleanup_when_exceeds: 0    # prune backups only once this many exist
+
+security:
+  auth:
+    # Applies to every protocol: REST (Bearer / X-API-Token), RESP and TCP
+    # (AUTH <token>).
+    enabled: false
+    tokens: []
+  tls:                       # HTTPS for the REST API
+    enabled: false
+    cert_file: ""
+    key_file: ""
+  rate_limit:                # per client IP, REST API only
+    enabled: false
+    requests_per_second: 1000
+    burst: 100
+
+logging:
+  level: "info"              # debug, info, warn, error
+  format: "text"             # text, json
+  file: ""                   # empty = stderr
+
+monitoring:
+  metrics:
+    enabled: true
+    endpoint: "/metrics"     # Prometheus text format on the REST port
+  health:
+    enabled: true
+    endpoint: "/health"
+  profiling:
+    enabled: false
+    endpoint: "/debug/pprof"
+
+performance:
+  gc_percent: 100
+
+features:
+  lua_scripting: true
+  lua_timeout: "5s"
+  pub_sub: true

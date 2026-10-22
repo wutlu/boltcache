@@ -2,8 +2,8 @@
 
 # BoltCache Authentication Examples
 
-BASE_URL="http://localhost:8090"
-TOKEN="dev-token-123"
+BASE_URL="${BASE_URL:-http://localhost:8090}"
+TOKEN="${TOKEN:-dev-token-123}"
 
 echo "🔐 BoltCache Authentication Examples"
 echo "===================================="

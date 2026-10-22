@@ -1,40 +1,22 @@
 package cmd
 
 import (
-	"log"
-"fmt"
+	"errors"
+
 	"github.com/spf13/cobra"
-
-	"boltcache/config"
-	"boltcache/internal/server"
 )
 
-var (
-	nodeID   string
-	nodePort int
-	replicas []string
-)
-
+// The 1.x "cluster" command started a standalone node and printed its
+// replica list, but never replicated any data. Rather than keep a command
+// that suggests high availability it doesn't provide, it now explains that.
 var clusterCmd = &cobra.Command{
-	Use:   "cluster",
-	Short: "Start a BoltCache cluster node",
-	Run: func(cmd *cobra.Command, args []string) {
-		if nodeID == "" || nodePort == 0 {
-			log.Fatalf("Both --node and --port must be specified")
-		}
-
-		cfg, err := config.LoadConfig(configFile)
-		if err != nil {
-			log.Fatalf("Failed to load config: %v", err)
-		}
-fmt.Print(replicas)
-
-		server.RunClusterCMD(cfg, nodeID, nodePort, replicas)
+	Use:    "cluster",
+	Short:  "(not available) clustering and replication are on the roadmap",
+	Hidden: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return errors.New("clustering/replication is not implemented yet: the 1.x `cluster` command ran an " +
+			"isolated node and never replicated data. Run `boltcache server` instead; follow " +
+			"https://github.com/wutlu/boltcache/issues for replication progress")
 	},
-}
-
-func init() {
-	clusterCmd.Flags().StringVar(&nodeID, "node", "", "Cluster node ID")
-	clusterCmd.Flags().IntVar(&nodePort, "port", 0, "Cluster node port")
-	clusterCmd.Flags().StringSliceVar(&replicas, "replica", nil, "Add replicas (comma separated)")
+	DisableFlagParsing: true,
 }

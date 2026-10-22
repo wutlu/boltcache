@@ -2,11 +2,10 @@ package swaggerui
 
 import (
 	"regexp"
+	"sort"
 	"strings"
-)
 
-import (
-	appinfo "boltcache/appinfo"
+	"github.com/wutlu/boltcache/appinfo"
 )
 
 type APIRoute struct {
@@ -78,18 +77,31 @@ func generateOpenAPISpec() map[string]interface{} {
 		tagSet[r.Tag] = true
 	}
 
-	var tags []map[string]string
+	var names []string
 	for t := range tagSet {
+		names = append(names, t)
+	}
+	sort.Strings(names)
+	tags := make([]map[string]string, 0, len(names))
+	for _, t := range names {
 		tags = append(tags, map[string]string{"name": t})
 	}
 
 	return map[string]interface{}{
-		"openapi": "3.0.0",
+		"openapi": "3.0.3",
 		"info": map[string]interface{}{
-			"title":   appinfo.Title,
-			"version": appinfo.Version,
+			"title":       appinfo.Title,
+			"version":     appinfo.Version,
+			"description": "REST API of BoltCache. The same data is reachable over the Redis protocol (RESP).",
 		},
 		"paths": paths,
 		"tags":  tags,
+		"components": map[string]interface{}{
+			"securitySchemes": map[string]interface{}{
+				"bearer": map[string]interface{}{"type": "http", "scheme": "bearer"},
+				"apiKey": map[string]interface{}{"type": "apiKey", "in": "header", "name": "X-API-Token"},
+			},
+		},
+		"security": []map[string][]string{{"bearer": {}}, {"apiKey": {}}},
 	}
 }

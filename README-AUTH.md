@@ -1,242 +1,86 @@
-# BoltCache Authentication Guide 🔐
+# BoltCache Authentication 🔐
 
-Token-based authentication for secure API access.
+BoltCache uses API tokens. When `security.auth.enabled` is true, the same tokens protect **every** protocol: the REST API, the RESP listener and the TCP text protocol.
 
-## Quick Start
+## Enabling authentication
 
-```bash
-# Run with auth enabled (dev config)
-make run-dev
-
-# Test authentication
-make test-auth
-
-# Open web client with auth
-make web-client
-```
-
-## Authentication Methods
-
-### 1. Authorization Header (Recommended)
-```bash
-curl -H "Authorization: Bearer your-token-here" \
-  http://localhost:8080/cache/key
-```
-
-### 2. X-API-Token Header
-```bash
-curl -H "X-API-Token: your-token-here" \
-  http://localhost:8080/cache/key
-```
-
-### 3. Query Parameter
-```bash
-curl "http://localhost:8080/cache/key?token=your-token-here"
-```
-
-## Configuration
-
-### Enable Authentication
 ```yaml
-# config.yaml
-security:
-  auth:
-    enabled: true
-    method: "token"
-    tokens:
-      - "your-secret-token-1"
-      - "your-secret-token-2"
-```
-
-### Development Config
-```yaml
-# config-dev.yaml
 security:
   auth:
     enabled: true
     tokens:
-      - "dev-token-123"
-      - "test-token-456"
-```
-
-### Production Config
-```yaml
-# config-prod.yaml
-security:
-  auth:
-    enabled: true
-    tokens:
-      - "prod-secure-token-xyz"
-```
-
-## Token Management API
-
-### List Tokens
-```bash
-GET /auth/tokens
-Authorization: Bearer your-token
-
-Response:
-{
-  "success": true,
-  "value": {
-    "token1": {
-      "token": "token1",
-      "created_at": "2024-01-01T00:00:00Z",
-      "last_used": "2024-01-01T12:00:00Z",
-      "usage_count": 42
-    }
-  }
-}
-```
-
-### Create Token
-```bash
-POST /auth/tokens
-Authorization: Bearer your-token
-
-Response:
-{
-  "success": true,
-  "value": {
-    "token": "newly-generated-token-abc123"
-  }
-}
-```
-
-### Delete Token
-```bash
-DELETE /auth/tokens/{token}
-Authorization: Bearer your-token
-
-Response:
-{
-  "success": true
-}
-```
-
-## Protected Endpoints
-
-All API endpoints require authentication except:
-- `GET /ping` - Health check
-- `GET /health` - Health status
-
-### Protected Endpoints:
-- All cache operations (`/cache/*`)
-- All data type operations (`/list/*`, `/set/*`, `/hash/*`)
-- Pub/Sub operations (`/publish/*`, `/subscribe/*`)
-- Script execution (`/eval`)
-- Server info (`/info`)
-- Token management (`/auth/*`)
-
-## Error Responses
-
-### 401 Unauthorized
-```json
-{
-  "success": false,
-  "error": "Authentication required"
-}
-```
-
-Returned when:
-- No token provided
-- Invalid token
-- Token not found
-
-## Security Best Practices
-
-### Token Generation
-- Use cryptographically secure random tokens
-- Minimum 32 characters length
-- Include letters, numbers, and symbols
-
-### Token Storage
-- Store tokens securely (environment variables, secrets manager)
-- Never commit tokens to version control
-- Rotate tokens regularly
-
-### Production Deployment
-```yaml
-# Use environment variables
-security:
-  auth:
-    enabled: true
-    tokens:
-      - "${BOLTCACHE_TOKEN_1}"
-      - "${BOLTCACHE_TOKEN_2}"
+      - "${BOLTCACHE_TOKEN}"        # taken from the environment at startup
+      - "another-token"
 ```
 
 ```bash
-# Set environment variables
-export BOLTCACHE_TOKEN_1="your-production-token-1"
-export BOLTCACHE_TOKEN_2="your-production-token-2"
+export BOLTCACHE_TOKEN=$(openssl rand -hex 24)
+boltcache server --config config-prod.yaml
 ```
 
-## JavaScript Client Example
+`boltcache config validate` fails if auth is enabled without a non-empty token. With Docker: `docker run -e BOLTCACHE_AUTH=true -e BOLTCACHE_TOKEN=... ghcr.io/wutlu/boltcache`.
 
-```javascript
-class BoltCacheClient {
-  constructor(baseUrl, token) {
-    this.baseUrl = baseUrl;
-    this.token = token;
-  }
+The dev configuration (`make run-dev`) enables auth with the tokens `dev-token-123` and `test-token-456`.
 
-  async request(method, path, body = null) {
-    const options = {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.token}`
-      }
-    };
-    
-    if (body) {
-      options.body = JSON.stringify(body);
-    }
+## Using a token
 
-    const response = await fetch(`${this.baseUrl}${path}`, options);
-    return response.json();
-  }
+### REST API
 
-  async set(key, value, ttl = null) {
-    const body = { value };
-    if (ttl) body.ttl = ttl;
-    return this.request('PUT', `/cache/${key}`, body);
-  }
+```bash
+# Authorization header (recommended)
+curl -H "Authorization: Bearer $TOKEN" localhost:8090/cache/key
 
-  async get(key) {
-    return this.request('GET', `/cache/${key}`);
-  }
-}
+# X-API-Token header
+curl -H "X-API-Token: $TOKEN" localhost:8090/cache/key
 
-// Usage
-const client = new BoltCacheClient('http://localhost:8080', 'your-token');
-await client.set('user:1', 'John Doe');
-const result = await client.get('user:1');
+# Query parameter (needed for browser WebSockets, avoid elsewhere: URLs end up in logs)
+curl "localhost:8090/cache/key?token=$TOKEN"
 ```
 
-## Rate Limiting
+Requests without a valid token get `401 Unauthorized`. `/ping`, `/health`, `/ready`, `/`, `/docs` and `/openapi.json` are public so health checks and the web client work; `/metrics` requires a token (Prometheus supports `authorization: { credentials: ... }`).
 
-Combine with rate limiting for additional security:
+### Redis clients (RESP) and the text protocol
 
-```yaml
-security:
-  auth:
-    enabled: true
-    tokens: ["your-token"]
-  rate_limit:
-    enabled: true
-    requests_per_second: 1000
-    burst: 100
+```bash
+redis-cli -p 6382 -a "$TOKEN"
 ```
 
-## Monitoring
+```go
+rdb := redis.NewClient(&redis.Options{Addr: "localhost:6382", Password: token})
+```
 
-Track authentication metrics:
-- Failed authentication attempts
-- Token usage statistics
-- Most active tokens
-- Authentication errors
+```
+$ nc localhost 6380
+GET key
+ERROR: NOAUTH Authentication required.
+AUTH my-token
+OK
+```
 
-Bu authentication sistemi ile BoltCache API'niz tamamen güvenli! 🛡️
+`AUTH <token>`, `AUTH default <token>` and `HELLO 2 AUTH default <token>` are accepted. Until a client authenticates, only `AUTH`, `HELLO`, `PING`, `QUIT` and `RESET` are allowed.
+
+## Managing tokens at runtime
+
+```bash
+# List tokens (masked) with usage statistics
+curl -H "Authorization: Bearer $TOKEN" localhost:8090/auth/tokens
+
+# Create a token
+curl -X POST -H "Authorization: Bearer $TOKEN" localhost:8090/auth/tokens
+# {"success":true,"value":{"token":"bc_6c0f...","note":"runtime token: kept in memory until the server restarts"}}
+
+# Revoke it (by value or by the masked id shown in the list)
+curl -X DELETE -H "Authorization: Bearer $TOKEN" localhost:8090/auth/tokens/bc_6c0f...
+```
+
+Runtime tokens work for every protocol and disappear on restart. Tokens from the config file can't be revoked at runtime; remove them from the file and restart.
+
+## Recommendations
+
+- Generate long random tokens (`openssl rand -hex 24`) and inject them through environment variables or secrets, not committed files.
+- Keep `cors_origins` to your own front-end origins.
+- Enable `security.rate_limit` on internet-facing REST endpoints.
+- Use `security.tls` (or a TLS-terminating proxy) for the REST API. The RESP and TCP listeners are plain TCP: keep them on private networks.
+- Token comparisons are constant-time, and `boltcache config show` masks tokens.
+
+Try it end to end with [examples/auth-examples.sh](examples/auth-examples.sh) against `make run-dev`.

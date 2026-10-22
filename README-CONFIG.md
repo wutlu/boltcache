@@ -1,253 +1,110 @@
-# BoltCache Configuration Guide 🔧
+# BoltCache Configuration 🔧
 
-Comprehensive configuration management for BoltCache server.
-
-## Quick Start
+BoltCache reads a YAML file (default `config.yaml`, override with `--config`/`-c` or the `BOLTCACHE_CONFIG` environment variable). Every setting is optional: missing settings use the defaults below, and a missing file means "all defaults".
 
 ```bash
-# Generate default config
-make generate-config
-
-# Run with default config
-make run
-
-# Run development mode
-make run-dev
-
-# Run production mode  
-make run-prod
-
-# Validate configuration
-make validate-config
+boltcache config generate            # write a documented config.yaml (--force to overwrite)
+boltcache config validate -c my.yaml # report every problem at once
+boltcache config show                # effective configuration, tokens masked
 ```
 
-## Configuration Files
+## Environment variables
 
-### Default Configs
-- `config.yaml` - Default configuration
-- `config-dev.yaml` - Development settings
-- `config-prod.yaml` - Production settings
+`${VAR}` and `${VAR:-default}` anywhere in the file are replaced from the environment before parsing. Bare `$VAR` is left alone, so values containing `$` are safe.
 
-### Custom Config
-```bash
-# Use custom config file
-go run . server --config /path/to/custom.yaml
-```
-
-## Configuration Sections
-
-### 🖥️ Server Configuration
-```yaml
-server:
-  mode: "rest"  # tcp, rest, both
-  swaggerui: true # Swagger UI for API exploration
-  tcp:
-    host: "0.0.0.0"
-    port: 6380
-    max_connections: 1000
-    read_timeout: "30s"
-    write_timeout: "30s"
-  rest:
-    host: "0.0.0.0"
-    port: 8080
-    cors_enabled: true
-    cors_origins: ["*"]
-    request_timeout: "30s"
-    max_request_size: "10MB"
-```
-
-### 💾 Cache Configuration
-```yaml
-cache:
-  max_memory: "1GB"        # Memory limit
-  max_keys: 1000000        # Key count limit
-  default_ttl: "0s"        # Default expiration
-  max_ttl: "24h"           # Maximum TTL allowed
-  cleanup_interval: "1m"   # Cleanup frequency
-  eviction_policy: "lru"   # lru, lfu, random, ttl
-  eviction_threshold: 0.8  # Start evicting at 80%
-```
-
-### 💿 Persistence Configuration
-```yaml
-persistence:
-  enabled: true
-  file: "./data/boltcache.json"
-  interval: "30s"         # Save frequency
-  compression: true       # Compress data
-  backup_count: 3         # Keep N backups
-  snapshot:
-    enabled: true
-    interval: "5m"
-    directory: "./snapshots"
-```
-
-### 🔒 Security Configuration
 ```yaml
 security:
   auth:
-    enabled: false
-    method: "token"       # token, basic, jwt
-    tokens: ["secret-token"]
-  tls:
-    enabled: false
-    cert_file: "cert.pem"
-    key_file: "key.pem"
-  rate_limit:
-    enabled: true
-    requests_per_second: 1000
-    burst: 100
-```
-
-### 📊 Monitoring Configuration
-```yaml
-monitoring:
-  metrics:
-    enabled: true
-    endpoint: "/metrics"
-    interval: "10s"
-  health:
-    enabled: true
-    endpoint: "/health"
-  profiling:
-    enabled: false
-    endpoint: "/debug/pprof"
-```
-
-### ⚡ Performance Configuration
-```yaml
-performance:
-  max_goroutines: 10000
-  read_buffer_size: "4KB"
-  write_buffer_size: "4KB"
-  gc_percent: 100
-  connection_pool:
-    max_idle: 100
-    max_active: 1000
-    idle_timeout: "5m"
-```
-
-### 🎛️ Feature Flags
-```yaml
-features:
-  lua_scripting: true
-  pub_sub: true
-  complex_types: true
-  transactions: false
-  geo_commands: false
-  streams: false
-```
-
-## Environment-Specific Configs
-
-### Development
-```yaml
-# config-dev.yaml
-server:
-  mode: "both"  # Both TCP and REST
+    enabled: ${BOLTCACHE_AUTH:-false}
+    tokens: ["${BOLTCACHE_TOKEN}"]
 cache:
-  max_memory: "512MB"
-logging:
-  level: "debug"
-  format: "text"
+  max_memory: "${BOLTCACHE_MAX_MEMORY:-1GB}"
 ```
 
-### Production
-```yaml
-# config-prod.yaml
-server:
-  mode: "rest"
-cache:
-  max_memory: "4GB"
-  eviction_threshold: 0.85
-security:
-  auth:
-    enabled: true
-  rate_limit:
-    requests_per_second: 10000
-logging:
-  level: "info"
-  format: "json"
-```
+## Reference
 
-## Memory Size Format
+### server
 
-Supported units:
-- `B` - Bytes
-- `KB` - Kilobytes  
-- `MB` - Megabytes
-- `GB` - Gigabytes
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `mode` | `both` | `tcp` (TCP + RESP), `rest` (HTTP + RESP) or `both` |
+| `swaggerui` | `false` | Serve `/docs` and `/openapi.json` |
+| `tcp.host` / `tcp.port` | `0.0.0.0` / `6380` | Text protocol listener (also understands RESP) |
+| `tcp.max_connections` | `10000` | Per-listener connection limit for TCP and RESP |
+| `resp.enabled` | `true` | Run the Redis protocol listener |
+| `resp.host` / `resp.port` | tcp host / `6382` | Redis protocol listener |
+| `rest.host` / `rest.port` | `0.0.0.0` / `8090` | HTTP listener |
+| `rest.cors_enabled` | `true` | Send CORS headers |
+| `rest.cors_origins` | `["*"]` | Allowed origins (also checked for WebSocket upgrades) |
+| `rest.request_timeout` | `30s` | Per-request timeout (not applied to WebSockets) |
+| `rest.max_request_size` | `10MB` | Maximum request body |
 
-Examples:
-```yaml
-max_memory: "1GB"
-max_request_size: "10MB"
-read_buffer_size: "4KB"
-```
+### cache
 
-## Time Duration Format
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `max_memory` | `0` | Memory limit such as `512MB` or `2GB`; `0` = unlimited. Accounting is approximate (keys, values and per-item overhead, not Go runtime overhead). |
+| `max_keys` | `0` | Key limit; `0` = unlimited |
+| `eviction_policy` | `lru` | `lru`, `lfu`, `random`, `ttl` (nearest expiry first) or `noeviction` (writes fail with `OOM`) |
+| `eviction_threshold` | `1.0` | Start evicting at this fraction of `max_memory` |
+| `default_ttl` | `0s` | TTL applied by the REST API when a request doesn't set one |
+| `max_ttl` | `0s` | Largest TTL the REST API accepts (`0` = no limit) |
+| `cleanup_interval` | `1m` | How often expired keys are reclaimed. Expired keys are never returned in between. |
 
-Supported units:
-- `s` - Seconds
-- `m` - Minutes
-- `h` - Hours
+### persistence
 
-Examples:
-```yaml
-cleanup_interval: "1m"
-max_ttl: "24h"
-request_timeout: "30s"
-```
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `enabled` | `true` | Save snapshots and restore them on startup |
+| `file` | `./data/boltcache.json` | Snapshot path |
+| `interval` | `30s` | Save interval; skipped when nothing changed. A final snapshot is written on shutdown. |
+| `compression` | `false` | gzip snapshots (loading detects compression automatically) |
+| `backup_count` | `3` | Previous snapshots kept as `<file>.backup.<timestamp>` |
+| `cleanup_when_exceeds` | `0` | Prune backups only once this many exist (batches deletions) |
 
-## Configuration Validation
+Snapshots are newline-delimited JSON with a header line and one typed entry per key; binary data is base64-encoded so it round-trips exactly. They're written to a temporary file, fsynced and atomically renamed, so a crash never leaves a truncated snapshot. Snapshots from BoltCache 1.x are converted on load. If a snapshot can't be read the server refuses to start rather than silently starting empty.
 
-```bash
-# Validate current config
-make validate-config
+### security
 
-# Validate specific config
-go run . config validate --config config-prod.yaml
-```
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `auth.enabled` | `false` | Require a token on every protocol ([README-AUTH.md](README-AUTH.md)) |
+| `auth.tokens` | `[]` | Accepted tokens (empty entries are ignored) |
+| `tls.enabled` | `false` | Serve the REST API over HTTPS |
+| `tls.cert_file` / `tls.key_file` | | PEM certificate and key |
+| `rate_limit.enabled` | `false` | Per-client-IP token bucket for the REST API (`429` when exceeded) |
+| `rate_limit.requests_per_second` / `burst` | `1000` / `100` | Bucket rate and size |
 
-## Environment Variables
+### logging
 
-Override config with environment variables:
-```bash
-export BOLTCACHE_SERVER_REST_PORT=9090
-export BOLTCACHE_CACHE_MAX_MEMORY=2GB
-export BOLTCACHE_LOGGING_LEVEL=debug
-```
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `level` | `info` | `debug`, `info`, `warn`, `error` (debug logs every HTTP request) |
+| `format` | `text` | `text` or `json` |
+| `file` | | Log file (appended); empty = stderr. Use logrotate or your platform's log collection for rotation. |
 
-## Docker Configuration
+### monitoring
 
-```dockerfile
-# Mount config file
-docker run -v ./config-prod.yaml:/app/config.yaml boltcache -config config.yaml
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `metrics.enabled` / `endpoint` | `true` / `/metrics` | Prometheus metrics on the REST port |
+| `health.enabled` / `endpoint` | `true` / `/health` | Health endpoint (plus `/ready`) |
+| `profiling.enabled` / `endpoint` | `false` / `/debug/pprof` | Go pprof handlers (require a token when auth is enabled) |
 
-# Use environment variables
-docker run -e BOLTCACHE_SERVER_REST_PORT=8080 boltcache
-```
+### features and performance
 
-## Best Practices
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `features.lua_scripting` | `true` | Enable `EVAL`/`EVALSHA`/`SCRIPT` and `POST /eval` |
+| `features.lua_timeout` | `5s` | Abort scripts running longer than this |
+| `features.pub_sub` | `true` | Enable pub/sub commands and WebSockets |
+| `performance.gc_percent` | `100` | Go GC target (`GOGC`) |
 
-### Development
-- Enable debug logging
-- Use both TCP and REST modes
-- Frequent persistence saves
-- Lower memory limits
+Settings from 1.x that were never implemented (`cluster.*`, `persistence.snapshot.*`, `performance.connection_pool.*`, `logging.max_size`...) are still accepted so old files keep loading, but they have no effect.
 
-### Production
-- JSON logging format
-- Authentication enabled
-- Rate limiting configured
-- Backup and snapshots enabled
-- Performance tuning applied
+## Example files
 
-### Security
-- Disable CORS in production
-- Use TLS certificates
-- Enable authentication
-- Configure rate limiting
-- Restrict CORS origins
-
-Bu configuration sistemi ile BoltCache'i her ortam için optimize edebilirsin! 🎯
+- [config.yaml](config.yaml): every setting with its default, documented
+- [config-dev.yaml](config-dev.yaml): local development, auth on (`dev-token-123`), debug logs, pprof
+- [config-prod.yaml](config-prod.yaml): production starting point with auth, rate limiting, memory limit and JSON logs
+- [deploy/docker/config.yaml](deploy/docker/config.yaml): the Docker image's config, driven by `BOLTCACHE_*` environment variables

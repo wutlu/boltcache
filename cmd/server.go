@@ -1,24 +1,50 @@
 package cmd
 
 import (
-	"log"
+	"fmt"
+	"os"
+	"strings"
 
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 
-	server "boltcache/internal/server"
+	"github.com/wutlu/boltcache/config"
+	"github.com/wutlu/boltcache/internal/server"
+	"github.com/wutlu/boltcache/logger"
 )
 
 var serverCmd = &cobra.Command{
 	Use:   "server",
 	Short: "Start the BoltCache server",
-	Run: func(cmd *cobra.Command, args []string) {
-		srv, err := server.NewServer(configFile)
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := config.LoadConfig(configFile)
 		if err != nil {
-			log.Fatalf("Failed to create server: %v", err)
+			return err
 		}
+		if _, err := os.Stat(configFile); err != nil {
+			fmt.Fprintf(os.Stderr, "config file %s not found, using defaults (run `boltcache config generate` to create one)\n", configFile)
+		}
+		log, closer, err := logger.Setup(cfg.Logging)
+		if err != nil {
+			return err
+		}
+		defer closer.Close()
 
-		if err := srv.Start(); err != nil {
-			log.Fatalf("Server exited with error: %v", err)
+		if isatty.IsTerminal(os.Stdout.Fd()) && !strings.EqualFold(cfg.Logging.Format, "json") {
+			logger.StartupMessage()
 		}
+		srv, err := server.New(cfg, log)
+		if err != nil {
+			return err
+		}
+		return srv.Run()
+	},
+}
+
+var versionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "Print version information",
+	Run: func(cmd *cobra.Command, args []string) {
+		printVersion()
 	},
 }
