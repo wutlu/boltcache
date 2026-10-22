@@ -15,12 +15,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/wutlu/boltcache/appinfo"
-	"github.com/wutlu/boltcache/config"
-	"github.com/wutlu/boltcache/internal/auth"
-	"github.com/wutlu/boltcache/internal/cache"
-	"github.com/wutlu/boltcache/internal/command"
-	"github.com/wutlu/boltcache/internal/pubsub"
+	"github.com/wutlu/boltcache/v2/appinfo"
+	"github.com/wutlu/boltcache/v2/config"
+	"github.com/wutlu/boltcache/v2/internal/auth"
+	"github.com/wutlu/boltcache/v2/internal/cache"
+	"github.com/wutlu/boltcache/v2/internal/command"
+	"github.com/wutlu/boltcache/v2/internal/pubsub"
 )
 
 // Server is a running BoltCache instance.

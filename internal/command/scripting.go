@@ -13,8 +13,8 @@ import (
 	lua "github.com/yuin/gopher-lua"
 	"github.com/yuin/gopher-lua/parse"
 
-	"github.com/wutlu/boltcache/internal/cache"
-	"github.com/wutlu/boltcache/internal/resp"
+	"github.com/wutlu/boltcache/v2/internal/cache"
+	"github.com/wutlu/boltcache/v2/internal/resp"
 )
 
 // Lua scripting follows Redis semantics:

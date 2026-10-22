@@ -19,8 +19,8 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/wutlu/boltcache/config"
-	"github.com/wutlu/boltcache/internal/resp"
+	"github.com/wutlu/boltcache/v2/config"
+	"github.com/wutlu/boltcache/v2/internal/resp"
 )
 
 func freePort(t *testing.T) int {

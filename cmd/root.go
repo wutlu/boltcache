@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/wutlu/boltcache/appinfo"
+	"github.com/wutlu/boltcache/v2/appinfo"
 )
 
 var (

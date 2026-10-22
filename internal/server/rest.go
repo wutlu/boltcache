@@ -23,11 +23,11 @@ import (
 	"github.com/gorilla/websocket"
 	"golang.org/x/time/rate"
 
-	"github.com/wutlu/boltcache/config"
-	"github.com/wutlu/boltcache/internal/auth"
-	"github.com/wutlu/boltcache/internal/command"
-	"github.com/wutlu/boltcache/internal/resp"
-	"github.com/wutlu/boltcache/swaggerui"
+	"github.com/wutlu/boltcache/v2/config"
+	"github.com/wutlu/boltcache/v2/internal/auth"
+	"github.com/wutlu/boltcache/v2/internal/command"
+	"github.com/wutlu/boltcache/v2/internal/resp"
+	"github.com/wutlu/boltcache/v2/swaggerui"
 )
 
 //go:embed web

@@ -8,7 +8,7 @@ BoltCache speaks the Redis protocol (RESP), so `redis-cli`, `redis-benchmark` an
 
 [![CI](https://github.com/wutlu/boltcache/actions/workflows/ci.yml/badge.svg)](https://github.com/wutlu/boltcache/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/wutlu/boltcache)](https://github.com/wutlu/boltcache/releases)
-[![Go Reference](https://pkg.go.dev/badge/github.com/wutlu/boltcache.svg)](https://pkg.go.dev/github.com/wutlu/boltcache)
+[![Go Reference](https://pkg.go.dev/badge/github.com/wutlu/boltcache/v2.svg)](https://pkg.go.dev/github.com/wutlu/boltcache/v2)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/wutlu/boltcache)](go.mod)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -45,7 +45,7 @@ Enable authentication with `-e BOLTCACHE_AUTH=true -e BOLTCACHE_TOKEN=change-me`
 Download a binary for Linux, macOS, Windows or FreeBSD from [Releases](https://github.com/wutlu/boltcache/releases), or install with Go 1.26+:
 
 ```bash
-go install github.com/wutlu/boltcache@latest
+go install github.com/wutlu/boltcache/v2@latest
 boltcache config generate   # writes a documented config.yaml
 boltcache server
 ```
@@ -253,7 +253,7 @@ boltcache client benchmark --addr localhost:6382 --clients 50 --requests 500000 
 - The Redis-compatible port (6382) now supports every command listed above instead of only `PING`/`SET`/`GET`. The separate gnet text port (6381) is gone: port 6380 is served by gnet now and understands both protocols.
 - Writing a different type to an existing key returns `WRONGTYPE` (1.x silently replaced it), and commands follow Redis semantics, e.g. `HSET` returns the number of new fields.
 - The `cluster` command was removed: it never replicated data. Replication is on the roadmap.
-- The Go module path is now `github.com/wutlu/boltcache`, and Go 1.26+ is required to build.
+- The Go module path is now `github.com/wutlu/boltcache/v2`, and Go 1.26+ is required to build.
 
 See [CHANGELOG.md](CHANGELOG.md) for everything that changed.
 

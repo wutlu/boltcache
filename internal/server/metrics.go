@@ -8,8 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/wutlu/boltcache/internal/cache"
-	"github.com/wutlu/boltcache/internal/command"
+	"github.com/wutlu/boltcache/v2/internal/cache"
+	"github.com/wutlu/boltcache/v2/internal/command"
 )
 
 // metrics renders Prometheus text exposition format. It's hand-written to
