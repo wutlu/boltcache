@@ -26,7 +26,7 @@ Thank you for your interest in contributing to BoltCache! 🚀
 1. **Fork** the repository
 2. **Clone** your fork:
    ```bash
-   git clone https://github.com/wutlu/boltcache.git
+   git clone https://github.com/<your-user>/boltcache.git
    ```
 3. **Create** a feature branch:
    ```bash
@@ -35,8 +35,8 @@ Thank you for your interest in contributing to BoltCache! 🚀
 4. **Make** your changes
 5. **Test** your changes:
    ```bash
-   make test-rest
-   make test-auth
+   make test-race
+   make lint
    ```
 6. **Commit** with clear messages:
    ```bash
@@ -50,24 +50,35 @@ Thank you for your interest in contributing to BoltCache! 🚀
 
 ## Development Setup
 
+Requires Go 1.26 or newer.
+
 ```bash
-# Install dependencies
-go mod download
-
-# Run development server
-make run-dev
-
-# Run tests
-make test-rest
-make test-auth
-
-# Validate configuration
-make validate-config
+make help            # list all targets
+make run-dev         # dev server: auth on (token dev-token-123), debug logs
+make test-race       # unit + integration tests with the race detector
+make lint            # golangci-lint
+make fuzz            # fuzz the RESP parser and glob matcher
+make bench           # micro benchmarks
+make benchmark       # load test a running server
 ```
+
+### Project layout
+
+| Path | Contents |
+|------|----------|
+| `internal/cache` | Sharded keyspace, value types, expiry, eviction, snapshots |
+| `internal/command` | Redis command implementations, transactions, Lua scripting |
+| `internal/resp` | RESP parser/encoder |
+| `internal/server` | gnet listeners (RESP + text), REST API, WebSocket, metrics |
+| `internal/pubsub`, `internal/glob`, `internal/auth` | Pub/sub hub, glob matching, tokens |
+| `config` | Configuration loading and validation |
+| `cmd` | CLI (`server`, `client`, `config`, `version`) |
+
+New commands go in `internal/command` (register them in the matching `register*` function) and need a test in `engine_test.go`; behaviour should match Redis. The integration tests in `internal/server` start real servers and use go-redis, raw TCP and WebSocket clients.
 
 ## Code Style
 
-- Follow Go conventions and `gofmt`
+- Follow Go conventions; `make lint` must pass
 - Add comments for public functions
 - Write tests for new features
 - Keep functions small and focused

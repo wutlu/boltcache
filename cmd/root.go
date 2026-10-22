@@ -1,17 +1,22 @@
 package cmd
 
 import (
+	"os"
+
 	"github.com/spf13/cobra"
 
-	logger "boltcache/logger"
+	"github.com/wutlu/boltcache/appinfo"
 )
 
 var (
 	configFile string
 	rootCmd    = &cobra.Command{
-		Use:   "boltcache",
-		Short: "BoltCache - high performance in-memory cache",
-		Long:  "BoltCache is a Redis-like high-performance cache server with Lua scripting, pub/sub, and cluster support.",
+		Use:           "boltcache",
+		Short:         "BoltCache - high performance, Redis-compatible in-memory cache",
+		Long:          "BoltCache is a Redis-compatible in-memory cache server with a REST API, Lua scripting, pub/sub and persistence.",
+		Version:       appinfo.Version,
+		SilenceUsage:  true,
+		SilenceErrors: false,
 	}
 )
 
@@ -19,14 +24,19 @@ func Execute() error {
 	return rootCmd.Execute()
 }
 
+func defaultConfigPath() string {
+	if p := os.Getenv("BOLTCACHE_CONFIG"); p != "" {
+		return p
+	}
+	return "config.yaml"
+}
+
 func init() {
-	logger.StartupMessage()
+	rootCmd.PersistentFlags().StringVarP(&configFile, "config", "c", defaultConfigPath(), "path to the configuration file (env BOLTCACHE_CONFIG)")
 
-	rootCmd.PersistentFlags().StringVar(&configFile, "config", "config.yaml", "Path to configuration file")
-
-	// Burada tüm subcommand’lar root'a eklenecek
 	rootCmd.AddCommand(serverCmd)
 	rootCmd.AddCommand(clusterCmd)
 	rootCmd.AddCommand(clientCmd)
 	rootCmd.AddCommand(configCmd)
+	rootCmd.AddCommand(versionCmd)
 }

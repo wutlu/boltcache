@@ -4,56 +4,35 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 1.0.x   | :white_check_mark: |
+| 2.x     | :white_check_mark: |
+| 1.x     | :x: (authentication was not enforced; please upgrade) |
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in BoltCache, please report it responsibly:
+**Do not** open a public GitHub issue for security vulnerabilities. Instead, report them privately:
 
-### 🔒 Private Disclosure
+- Use GitHub's [private vulnerability reporting](https://github.com/wutlu/boltcache/security/advisories/new), or
+- Email **mutlu@etsetra.com** with the subject "BoltCache Security Vulnerability".
 
-**DO NOT** create a public GitHub issue for security vulnerabilities.
+Please include a description, steps to reproduce, the impact and, if you have one, a suggested fix.
 
-Instead, please:
+### What to expect
 
-1. **Email**: mutlu@etsetra.com
-2. **Subject**: "BoltCache Security Vulnerability"
-3. **Include**:
-   - Description of the vulnerability
-   - Steps to reproduce
-   - Potential impact
-   - Suggested fix (if any)
+- **Acknowledgment** within 72 hours
+- **Initial assessment** within 7 days
+- **Fix**: critical issues as soon as possible, others in the next release
 
-### 📋 What to Expect
+Reporters are credited in the advisory unless they prefer otherwise.
 
-- **Acknowledgment**: Within 24 hours
-- **Initial Assessment**: Within 72 hours  
-- **Regular Updates**: Every 7 days until resolved
-- **Fix Timeline**: Critical issues within 7 days, others within 30 days
+## Hardening checklist
 
-### 🏆 Recognition
+When running BoltCache outside a trusted network:
 
-Security researchers who responsibly disclose vulnerabilities will be:
-- Credited in the security advisory (if desired)
-- Listed in our Hall of Fame
-- Eligible for a small token of appreciation
-
-### 🛡️ Security Best Practices
-
-When using BoltCache in production:
-
-- Enable authentication (`security.auth.enabled: true`)
-- Use strong, unique tokens
-- Enable rate limiting
-- Use TLS/HTTPS in production
-- Regularly update to latest version
-- Monitor access logs
-- Restrict network access
-
-### 📞 Contact
-
-For security-related questions:
-- 📧 Email: mutlu@etsetra.com
-- 🔗 Website: [etsetra.com](https://etsetra.com)
-
-Thank you for helping keep BoltCache secure! 🙏
+- Enable authentication (`security.auth.enabled: true`) with long random tokens injected through environment variables (`tokens: ["${BOLTCACHE_TOKEN}"]`).
+- Restrict `server.rest.cors_origins` to your own origins.
+- Enable `security.rate_limit` for the REST API.
+- Serve the REST API over HTTPS (`security.tls`) or behind a TLS-terminating proxy.
+- Keep the RESP (6382) and TCP (6380) ports on private networks: they don't support TLS yet.
+- Set `cache.max_memory` so a client can't exhaust the host's memory.
+- Keep `monitoring.profiling` disabled in production.
+- Run the official Docker image (non-root, distroless) or an unprivileged user, and keep BoltCache up to date.

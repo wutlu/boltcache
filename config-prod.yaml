@@ -1,18 +1,28 @@
-# Production Configuration
+# Production configuration example.
+#   BOLTCACHE_TOKEN=$(openssl rand -hex 24) boltcache server --config config-prod.yaml
 server:
-  mode: "rest"  # REST only for production
+  mode: "both"
+  swaggerui: false
+  tcp:
+    host: "0.0.0.0"
+    port: 6380
+    max_connections: 20000
+  resp:
+    port: 6382
   rest:
     host: "0.0.0.0"
     port: 8090
-    cors_enabled: false  # Disable CORS in production
-    request_timeout: "30s"
+    cors_enabled: true
+    cors_origins: ["https://app.example.com"]   # your front-end origins
+    request_timeout: "15s"
+    max_request_size: "4MB"
 
 cache:
   max_memory: "4GB"
-  max_keys: 10000000
-  cleanup_interval: "5m"
   eviction_policy: "lru"
-  eviction_threshold: 0.85
+  eviction_threshold: 0.9
+  cleanup_interval: "1m"
+  max_ttl: "720h"
 
 persistence:
   enabled: true
@@ -21,64 +31,36 @@ persistence:
   compression: true
   backup_count: 5
 
-  # Cleanup starts only when the total number of backup files
-  # exceeds this value.
-  # When triggered, old backups are deleted until only
-  # 'backup_count' newest files remain.
-  cleanup_when_exceeds: 20
-  snapshot:
-    enabled: true
-    interval: "15m"
-    directory: "/var/lib/boltcache/snapshots"
-
-cluster:
-  enabled: true
-  node_id: "prod-node-1"
-  replication:
-    enabled: true
-    mode: "async"
-    replicas:
-      - "prod-node-2:6380"
-      - "prod-node-3:6380"
-
 security:
   auth:
     enabled: true
-    method: "token"
     tokens:
-      - "your-production-token-here"
+      - "${BOLTCACHE_TOKEN}"
+  tls:
+    enabled: false          # or terminate TLS at your load balancer
+    cert_file: "/etc/boltcache/tls.crt"
+    key_file: "/etc/boltcache/tls.key"
   rate_limit:
     enabled: true
-    requests_per_second: 10000
-    burst: 1000
+    requests_per_second: 5000
+    burst: 500
 
 logging:
   level: "info"
   format: "json"
-  file: "/var/log/boltcache/app.log"
-  max_size: "100MB"
-  max_backups: 10
-  compress: true
 
 monitoring:
   metrics:
     enabled: true
     endpoint: "/metrics"
-    interval: "10s"
   health:
     enabled: true
     endpoint: "/health"
 
 performance:
-  max_goroutines: 50000
-  gc_percent: 75  # More aggressive GC for production
-  connection_pool:
-    max_idle: 500
-    max_active: 5000
-    idle_timeout: "5m"
+  gc_percent: 75
 
 features:
   lua_scripting: true
+  lua_timeout: "2s"
   pub_sub: true
-  complex_types: true
-  transactions: false

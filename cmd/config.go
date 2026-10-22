@@ -1,12 +1,18 @@
 package cmd
 
 import (
-	"log"
+	"fmt"
+	"os"
+	"runtime"
 
 	"github.com/spf13/cobra"
-	"boltcache/config"
+	"go.yaml.in/yaml/v3"
+
+	"github.com/wutlu/boltcache/appinfo"
+	"github.com/wutlu/boltcache/config"
 )
 
+var forceGenerate bool
 
 var configCmd = &cobra.Command{
 	Use:   "config",
@@ -15,31 +21,73 @@ var configCmd = &cobra.Command{
 
 var generateConfigCmd = &cobra.Command{
 	Use:   "generate",
-	Short: "Generate default configuration file",
-	Run: func(cmd *cobra.Command, args []string) {
-		if err := config.GenerateDefaultConfig(configFile); err != nil {
-			log.Fatalf("Failed to generate config: %v", err)
+	Short: "Write a documented default configuration file (to --config)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := config.GenerateDefaultConfig(configFile, forceGenerate); err != nil {
+			return err
 		}
-		log.Println("Default config generated: config.yaml")
+		fmt.Printf("Default configuration written to %s\n", configFile)
+		return nil
 	},
 }
 
 var validateConfigCmd = &cobra.Command{
 	Use:   "validate",
-	Short: "Validate configuration file",
-	Run: func(cmd *cobra.Command, args []string) {
-		cfg, err := config.LoadConfig("config.yaml")
+	Short: "Validate the configuration file (--config)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if _, err := os.Stat(configFile); err != nil {
+			return fmt.Errorf("cannot read %s: %w", configFile, err)
+		}
+		cfg, err := config.LoadConfig(configFile)
 		if err != nil {
-			log.Fatalf("Failed to load config: %v", err)
+			return err
 		}
 		if err := cfg.Validate(); err != nil {
-			log.Fatalf("Config is invalid: %v", err)
+			return fmt.Errorf("%s is invalid:\n%w", configFile, err)
 		}
-		log.Println("Configuration is valid ✅")
+		fmt.Printf("%s is valid ✅\n", configFile)
+		return nil
+	},
+}
+
+var showConfigCmd = &cobra.Command{
+	Use:   "show",
+	Short: "Print the effective configuration (file merged over defaults)",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := config.LoadConfig(configFile)
+		if err != nil {
+			return err
+		}
+		if len(cfg.Security.Auth.Tokens) > 0 {
+			masked := make([]string, len(cfg.Security.Auth.Tokens))
+			for i := range masked {
+				masked[i] = "********"
+			}
+			cfg.Security.Auth.Tokens = masked
+		}
+		out, err := yaml.Marshal(cfg)
+		if err != nil {
+			return err
+		}
+		fmt.Print(string(out))
+		return nil
 	},
 }
 
 func init() {
+	generateConfigCmd.Flags().BoolVarP(&forceGenerate, "force", "f", false, "overwrite an existing file")
 	configCmd.AddCommand(generateConfigCmd)
 	configCmd.AddCommand(validateConfigCmd)
+	configCmd.AddCommand(showConfigCmd)
+}
+
+func printVersion() {
+	fmt.Printf("%s %s\n", appinfo.Title, appinfo.Version)
+	if appinfo.Commit != "" {
+		fmt.Printf("commit:  %s\n", appinfo.Commit)
+	}
+	if appinfo.Date != "" {
+		fmt.Printf("built:   %s\n", appinfo.Date)
+	}
+	fmt.Printf("go:      %s %s/%s\n", runtime.Version(), runtime.GOOS, runtime.GOARCH)
 }

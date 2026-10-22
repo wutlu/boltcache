@@ -1,85 +1,68 @@
-build:
-	go build -o boltcache .
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//')
+LDFLAGS := -s -w -X github.com/wutlu/boltcache/appinfo.Version=$(VERSION)
+CONFIG  ?= config.yaml
 
-# Run server
-run:
-	go run . server --config config.yaml
+.PHONY: help build run run-dev run-prod test test-race fuzz bench lint vet \
+        generate-config validate-config show-config client benchmark test-features \
+        docker docker-run clean
 
-run-dev:
+help: ## Show this help
+	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
+
+build: ## Build the boltcache binary
+	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o boltcache .
+
+run: ## Run the server with config.yaml
+	go run . server --config $(CONFIG)
+
+run-dev: ## Run with config-dev.yaml (auth on, token dev-token-123)
 	go run . server --config config-dev.yaml
 
-run-prod:
+run-prod: ## Run with config-prod.yaml (needs BOLTCACHE_TOKEN)
 	go run . server --config config-prod.yaml
 
-# Config management
-generate-config:
-	go run . config generate
+test: ## Run unit and integration tests
+	go test -count=1 ./...
 
-validate-config:
-	go run . config validate --config config.yaml
+test-race: ## Run tests with the race detector
+	go test -race -count=1 ./...
 
+fuzz: ## Fuzz the protocol parser and glob matcher
+	go test -run '^$$' -fuzz FuzzParseCommand -fuzztime 60s ./internal/resp
+	go test -run '^$$' -fuzz FuzzMatch -fuzztime 30s ./internal/glob
 
-# Cluster nodes
-cluster-master:
-	go run . cluster --node node1 --port 6380
+bench: ## Run micro benchmarks
+	go test -run '^$$' -bench . -benchmem ./internal/...
 
-cluster-slave:
-	go run . cluster --node node2 --port 6381 --replica :6380
+vet: ## go vet
+	go vet ./...
 
+lint: ## Run golangci-lint
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 run ./...
 
-# Client commands
-client:
-	go run . client interactive --addr :6380
+generate-config: ## Write a documented default config.yaml
+	go run . config generate --config $(CONFIG)
 
-benchmark:
-	go run . client benchmark --addr :6380
+validate-config: ## Validate the configuration
+	go run . config validate --config $(CONFIG)
 
-test-features:
-	go run . client test --addr :6380
+show-config: ## Print the effective configuration
+	go run . config show --config $(CONFIG)
 
+client: ## Interactive client (RESP port)
+	go run . client interactive --addr localhost:6382
 
-# Testing scripts
+benchmark: ## Load test a running server
+	go run . client benchmark --addr localhost:6382 --clients 50 --requests 500000 --pipeline 16
 
-# OLD TEST COMMAND
-# test-rest:
-# 	chmod +x examples/rest-examples.sh && ./examples/rest-examples.sh
+test-features: ## Smoke test a running server
+	go run . client test --addr localhost:6382
 
-test-rest:
-	go test ./internal/server -run TestREST
+docker: ## Build the Docker image
+	docker build --build-arg VERSION=$(VERSION) -t boltcache:$(VERSION) -t boltcache:latest .
 
-test-auth:
-	chmod +x examples/auth-examples.sh && ./examples/auth-examples.sh
+docker-run: ## Run the Docker image
+	docker run --rm -p 6380:6380 -p 6382:6382 -p 8090:8090 -v boltcache-data:/data boltcache:latest
 
-# test-pubsub:
-# 	chmod +x examples/test-pubsub.sh && ./examples/test-pubsub.sh
-test-pubsub:
-	go test ./internal/server -run TestRESTPubSub
-
-
-# Helpers
-config-help:
-	@echo "Configuration Commands:"
-	@echo "  make generate-config  - Generate default config.yaml"
-	@echo "  make validate-config  - Validate configuration"
-	@echo "  make run-dev         - Run with development config"
-	@echo "  make run-prod        - Run with production config"
-	@echo "  make show-config     - Show current configuration"
-	@echo "  make test-auth       - Test authentication"
-
-show-config:
-	cat config.yaml
-
-web-client:
-	@echo "Web client available at: http://localhost:8090/rest-client.html"
-	@echo "Make sure server is running with: make run-dev"
-
-# Tests & Cleanup
-test:
-	go test ./...
-
-clean:
-	rm -f boltcache
-	rm -rf data/
-
-# Phony targets
-.PHONY: build run run-dev run-prod generate-config validate-config cluster-master cluster-slave client benchmark test-features test-rest test-auth test-pubsub config-help show-config web-client test clean
+clean: ## Remove build output and local data
+	rm -rf boltcache dist data logs

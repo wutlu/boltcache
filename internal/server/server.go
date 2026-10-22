@@ -1,203 +1,229 @@
+// Package server wires the cache, command engine and network listeners
+// (TCP text/RESP, RESP and HTTP) together and manages their lifecycle.
 package server
 
 import (
+	"context"
 	"fmt"
-	"log"
-	"net/http"
+	"log/slog"
+	"net"
 	"os"
 	"os/signal"
-	"runtime"
 	"runtime/debug"
+	"strings"
+	"sync/atomic"
 	"syscall"
+	"time"
 
-	"net"
-
-	"github.com/gorilla/websocket"
+	"github.com/wutlu/boltcache/appinfo"
+	"github.com/wutlu/boltcache/config"
+	"github.com/wutlu/boltcache/internal/auth"
+	"github.com/wutlu/boltcache/internal/cache"
+	"github.com/wutlu/boltcache/internal/command"
+	"github.com/wutlu/boltcache/internal/pubsub"
 )
 
-import (
-	config "boltcache/config"
-	cache "boltcache/internal/cache"
-	logger "boltcache/logger"
-)
-
+// Server is a running BoltCache instance.
 type Server struct {
-	config *config.Config
-	cache  *cache.BoltCache
+	cfg       *config.Config
+	log       *slog.Logger
+	cache     *cache.BoltCache
+	engine    *command.Engine
+	persister *cache.Persister
+	auth      *auth.Manager
+	metrics   *metrics
+	clients   atomic.Int64
+
+	tcp  *protoServer
+	resp *protoServer
+	rest *restServer
 }
 
-func NewServer(configFile string) (*Server, error) {
-	// Load configuration
-	config, err := config.LoadConfig(configFile)
+// New validates cfg, builds the cache and restores persisted data.
+func New(cfg *config.Config, log *slog.Logger) (*Server, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid config:\n%w", err)
+	}
+	if log == nil {
+		log = slog.Default()
+	}
+	if cfg.Performance.GCPercent > 0 {
+		debug.SetGCPercent(cfg.Performance.GCPercent)
+	}
+
+	maxMem, _ := config.ParseMemorySize(cfg.Cache.MaxMemory)
+	policy, err := cache.ParsePolicy(cfg.Cache.EvictionPolicy)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load config: %v", err)
+		return nil, err
+	}
+	c := cache.New(cache.Options{
+		MaxKeys:           int64(cfg.Cache.MaxKeys),
+		MaxMemory:         maxMem,
+		EvictionThreshold: cfg.Cache.EvictionThreshold,
+		EvictionPolicy:    policy,
+		CleanupInterval:   cfg.Cache.CleanupInterval,
+	})
+
+	s := &Server{cfg: cfg, log: log, cache: c}
+	s.auth = auth.NewManager(cfg.Security.Auth.Enabled, cfg.AuthTokens())
+	s.engine = command.New(c, pubsub.NewHub(), command.Config{
+		Auth:          s.auth,
+		LuaEnabled:    cfg.Features.LuaScripting,
+		PubSubEnabled: cfg.Features.PubSub,
+		ScriptTimeout: cfg.Features.LuaTimeout,
+		Version:       appinfo.Version,
+	})
+	s.engine.ClientCount = s.clients.Load
+
+	if cfg.Persistence.Enabled {
+		s.persister = cache.NewPersister(c, cache.PersistOptions{
+			File:               cfg.Persistence.File,
+			Interval:           cfg.Persistence.Interval,
+			Compress:           cfg.Persistence.Compression,
+			BackupCount:        cfg.Persistence.BackupCount,
+			CleanupWhenExceeds: cfg.Persistence.CleanupWhenExceeds,
+			Logf: func(format string, args ...any) {
+				log.Warn(fmt.Sprintf(format, args...))
+			},
+		})
+		start := time.Now()
+		n, err := s.persister.Load()
+		if err != nil {
+			c.Close()
+			return nil, fmt.Errorf("refusing to start with an unreadable snapshot (move it away to start empty): %w", err)
+		}
+		if n > 0 {
+			log.Info("restored snapshot", "file", cfg.Persistence.File, "keys", n, "took", time.Since(start).Round(time.Millisecond))
+		}
+		s.engine.Persister = s.persister
 	}
 
-	// Validate configuration
-	if err := config.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid config: %v", err)
+	s.metrics = &metrics{
+		started:   time.Now(),
+		version:   appinfo.Version,
+		engine:    s.engine,
+		persister: func() *cache.Persister { return s.persister },
+		clients:   &s.clients,
 	}
-
-	// Apply performance settings
-	applyPerformanceSettings(config)
-
-	// Create cache with config
-	cache := NewBoltCacheWithConfig(config)
-
-	return &Server{
-		config: config,
-		cache:  cache,
-	}, nil
+	return s, nil
 }
 
+// Engine returns the command engine (useful for embedding and tests).
+func (s *Server) Engine() *command.Engine { return s.engine }
+
+// Start binds all configured listeners. On error, already started
+// listeners are stopped.
 func (s *Server) Start() error {
-	logger.Log("Starting BoltCache server...")
-	logger.Log("Mode: %s", s.config.Server.Mode)
-	logger.Log("Features: Lua=%v, PubSub=%v, ComplexTypes=%v",
-		s.config.Features.LuaScripting,
-		s.config.Features.PubSub,
-		s.config.Features.ComplexTypes)
-
-	// Setup graceful shutdown
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	// Start servers based on mode
-	switch s.config.Server.Mode {
-	case "tcp":
-		go s.startTCPServer()
-		StartGnetServer(s.cache, s.config)     // High-performance gnet on port 6381
-		StartRESPGnetServer(s.cache, s.config) // RESP gnet (multicore) on port 6382
-	case "rest":
-		go s.startRESTServer()
-		StartRESPGnetServer(s.cache, s.config) // RESP gnet (multicore) on port 6382
-	case "both":
-		go s.startTCPServer()
-		go s.startRESTServer()
-		StartGnetServer(s.cache, s.config)     // High-performance gnet on port 6381
-		StartRESPGnetServer(s.cache, s.config) // RESP gnet (multicore) on port 6382
-	default:
-		return fmt.Errorf("invalid server mode: %s", s.config.Server.Mode)
+	cfg := s.cfg
+	s.log.Info("starting BoltCache", "version", appinfo.Version, "mode", cfg.Server.Mode,
+		"auth", s.auth.Enabled(), "lua", cfg.Features.LuaScripting, "pubsub", cfg.Features.PubSub,
+		"persistence", cfg.Persistence.Enabled)
+	if !s.auth.Enabled() {
+		var exposed []string
+		if cfg.TCPEnabled() && !isLoopback(cfg.Server.TCP.Host) {
+			exposed = append(exposed, cfg.GetTCPAddress())
+		}
+		if cfg.Server.RESP.IsEnabled() && !isLoopback(hostOf(cfg.GetRESPAddress())) {
+			exposed = append(exposed, cfg.GetRESPAddress())
+		}
+		if cfg.RESTEnabled() && !isLoopback(cfg.Server.REST.Host) {
+			exposed = append(exposed, cfg.GetRESTAddress())
+		}
+		if len(exposed) > 0 {
+			s.log.Warn("authentication is disabled; anyone who can reach these addresses can read and modify data (security.auth)",
+				"addrs", strings.Join(exposed, ","))
+		}
 	}
 
-	// Start monitoring if enabled
-	if s.config.Monitoring.Metrics.Enabled {
-		go s.startMetricsServer()
+	fail := func(err error) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		s.stopListeners(ctx)
+		return err
 	}
-
-	// Wait for shutdown signal
-	<-sigChan
-	logger.Log("Shutting down server...")
-
-	// Graceful shutdown
-	s.shutdown()
+	if cfg.TCPEnabled() {
+		s.tcp = newProtoServer("tcp", cfg.GetTCPAddress(), true, cfg.Server.TCP.MaxConnections, s.engine, s.log, &s.clients)
+		if err := s.tcp.start(); err != nil {
+			s.tcp = nil
+			return fail(err)
+		}
+	}
+	if cfg.Server.RESP.IsEnabled() {
+		s.resp = newProtoServer("resp", cfg.GetRESPAddress(), false, cfg.Server.TCP.MaxConnections, s.engine, s.log, &s.clients)
+		if err := s.resp.start(); err != nil {
+			s.resp = nil
+			return fail(err)
+		}
+	}
+	if cfg.RESTEnabled() {
+		s.rest = newRESTServer(cfg, s.engine, s.auth, s.metrics, s.log, appinfo.Version, &s.clients)
+		if err := s.rest.start(cfg.GetRESTAddress()); err != nil {
+			s.rest = nil
+			return fail(err)
+		}
+	}
+	if s.persister != nil {
+		s.persister.Start()
+	}
 	return nil
 }
 
-func (s *Server) startTCPServer() {
-	addr := s.config.GetTCPAddress()
-	logger.LogServerStartWithMsg("TCP server would start on %s", addr)
-
-	listener, err := net.Listen("tcp", addr)
+func hostOf(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
-		log.Fatalf("Failed to start TCP server: %v", err)
+		return addr
 	}
-	defer listener.Close()
+	return host
+}
 
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			log.Printf("Failed to accept connection: %v", err)
-			continue
+func isLoopback(host string) bool {
+	return host == "localhost" || strings.HasPrefix(host, "127.") || host == "::1"
+}
+
+func (s *Server) stopListeners(ctx context.Context) {
+	if s.rest != nil {
+		if err := s.rest.stop(ctx); err != nil {
+			s.log.Warn("stopping rest listener", "err", err)
 		}
-		go handleConnection(conn, s.cache)
+	}
+	for _, ps := range []*protoServer{s.tcp, s.resp} {
+		if ps != nil {
+			if err := ps.stop(ctx); err != nil {
+				s.log.Warn("stopping listener", "listener", ps.name, "err", err)
+			}
+		}
 	}
 }
 
-func (s *Server) startRESTServer() {
-	restServer := NewRestServerWithConfig(s.cache, s.config)
-	addr := s.config.GetRESTAddress()
-	logger.LogServerStartWithMsg("REST server starting on %s", addr)
-
-	if err := restServer.Start(); err != nil {
-		log.Fatalf("Failed to start REST server: %v", err)
+// Shutdown stops accepting connections, writes a final snapshot and stops
+// background work.
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.log.Info("shutting down")
+	s.stopListeners(ctx)
+	var err error
+	if s.persister != nil {
+		if err = s.persister.Stop(); err != nil {
+			s.log.Error("final snapshot failed", "err", err)
+		} else {
+			s.log.Info("snapshot saved", "file", s.cfg.Persistence.File, "keys", s.cache.Len())
+		}
 	}
+	s.cache.Close()
+	s.log.Info("shutdown complete")
+	return err
 }
 
-func (s *Server) startMetricsServer() {
-	// Metrics server implementation
-	logger.LogServerStartWithMsg("Metrics server starting on %s", s.config.Monitoring.Metrics.Endpoint)
-}
-
-func (s *Server) shutdown() {
-	logger.Log("Performing graceful shutdown...")
-
-	// Save data if persistence is enabled
-	if s.config.Persistence.Enabled {
-		logger.Log("Saving data to disk...")
-		s.cache.ForcePersist()
+// Run starts the server and blocks until SIGINT/SIGTERM, then shuts down
+// gracefully.
+func (s *Server) Run() error {
+	if err := s.Start(); err != nil {
+		return err
 	}
-
-	logger.Log("Shutdown complete")
-}
-
-func applyPerformanceSettings(config *config.Config) {
-	// Set GC percentage
-	if config.Performance.GCPercent > 0 {
-		debug.SetGCPercent(config.Performance.GCPercent)
-		logger.Log("Set GC percent to %d", config.Performance.GCPercent)
-	}
-
-	// Set max goroutines (via GOMAXPROCS)
-	if config.Performance.MaxGoroutines > 0 {
-		// if GOMAXPROCS load in config use this
-		// 		runtime.GOMAXPROCS(config.Performance.MaxGoroutines)
-		// 		logger.Log("Set GOMAXPROCS to %d", config.Performance.MaxGoroutines)
-
-		runtime.GOMAXPROCS(runtime.NumCPU())
-		logger.Log("Set GOMAXPROCS to %d", runtime.NumCPU())
-	}
-
-	logger.Log("Applied performance settings")
-}
-
-// Enhanced BoltCache constructor with config
-func NewBoltCacheWithConfig(config *config.Config) *cache.BoltCache {
-	_cache := &cache.BoltCache{
-		Data:        cache.NewShardedMap(),
-		PersistFile: config.Persistence.File,
-		Config:      config,
-	}
-
-	// Initialize Lua engine if enabled
-	if config.Features.LuaScripting {
-		_cache.LuaEngine = cache.NewLuaEngine(_cache)
-	}
-
-	// Load from disk if persistence enabled
-	if config.Persistence.Enabled {
-		_cache.LoadFromDisk()
-	}
-
-	// Start background tasks
-	go _cache.CleanupExpiredWithConfig()
-
-	if config.Persistence.Enabled {
-		go _cache.PersistToDiskWithConfig()
-	}
-
-	return _cache
-}
-
-// Enhanced REST server with config
-func NewRestServerWithConfig(cache *cache.BoltCache, config *config.Config) *RestServer {
-	return &RestServer{
-		cache:  cache,
-		config: config,
-		upgrader: websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool {
-				return config.Server.REST.CORSEnabled
-			},
-		},
-	}
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	<-sig
+	signal.Stop(sig)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return s.Shutdown(ctx)
 }

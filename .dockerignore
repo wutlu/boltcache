@@ -1,0 +1,11 @@
+.git
+.github
+.claude
+data
+logs
+dist
+*.test
+*.out
+boltcache
+Dockerfile
+docker-compose.yml

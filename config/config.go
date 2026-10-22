@@ -20,8 +20,21 @@ type ServerConfig struct {
 	Mode      string     `yaml:"mode"`
 	SwaggerUI bool       `yaml:"swaggerui,omitempty"`
 	TCP       TCPConfig  `yaml:"tcp"`
+	RESP      RESPConfig `yaml:"resp"`
 	REST      RESTConfig `yaml:"rest"`
 }
+
+// RESPConfig is the dedicated Redis protocol listener (redis-cli, go-redis,
+// ioredis, redis-py...). The TCP listener also understands RESP; this one
+// replies to inline commands in RESP as well, exactly like Redis.
+type RESPConfig struct {
+	Enabled *bool  `yaml:"enabled"`
+	Host    string `yaml:"host"`
+	Port    int    `yaml:"port"`
+}
+
+// IsEnabled reports whether the RESP listener should run (default true).
+func (r RESPConfig) IsEnabled() bool { return r.Enabled == nil || *r.Enabled }
 
 type TCPConfig struct {
 	Host           string        `yaml:"host"`
@@ -158,10 +171,11 @@ type ConnectionPoolConfig struct {
 }
 
 type FeaturesConfig struct {
-	LuaScripting bool `yaml:"lua_scripting"`
-	PubSub       bool `yaml:"pub_sub"`
-	ComplexTypes bool `yaml:"complex_types"`
-	Transactions bool `yaml:"transactions"`
-	GeoCommands  bool `yaml:"geo_commands"`
-	Streams      bool `yaml:"streams"`
+	LuaScripting bool          `yaml:"lua_scripting"`
+	LuaTimeout   time.Duration `yaml:"lua_timeout"`
+	PubSub       bool          `yaml:"pub_sub"`
+	ComplexTypes bool          `yaml:"complex_types"`
+	Transactions bool          `yaml:"transactions"`
+	GeoCommands  bool          `yaml:"geo_commands"`
+	Streams      bool          `yaml:"streams"`
 }
