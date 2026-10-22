@@ -12,7 +12,7 @@
 **Do not** open a public GitHub issue for security vulnerabilities. Instead, report them privately:
 
 - Use GitHub's [private vulnerability reporting](https://github.com/wutlu/boltcache/security/advisories/new), or
-- Email **mutlu@etsetra.com** with the subject "BoltCache Security Vulnerability".
+- Email **alper@is.team** with the subject "BoltCache Security Vulnerability".
 
 Please include a description, steps to reproduce, the impact and, if you have one, a suggested fix.
 

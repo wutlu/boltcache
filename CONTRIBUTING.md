@@ -104,7 +104,7 @@ New commands go in `internal/command` (register them in the matching `register*`
 
 ## Questions?
 
-- 📧 Email: mutlu@etsetra.com
+- 📧 Email: alper@is.team
 - 🐛 Issues: [GitHub Issues](https://github.com/wutlu/boltcache/issues)
 
 Thank you for making BoltCache better! ❤️
