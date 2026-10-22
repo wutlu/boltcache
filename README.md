@@ -203,30 +203,22 @@ redis-cli -p 6382 -a "$TOKEN" GET key                             # AUTH <token>
 
 ## 📊 Performance
 
-`redis-benchmark` against BoltCache 2.0 and Redis 8.4 (persistence on), 100 connections, 1M requests, 4 client threads. Apple M1 Pro (10 cores), macOS, loopback:
+See [BENCHMARKS.md](BENCHMARKS.md) for the full results, method and caveats. Every number comes from [`bench/run.sh`](bench/run.sh), which runs `redis-benchmark` against BoltCache, Redis, Valkey and Dragonfly with the same pinned CPU budget, and runs in CI.
 
-| Command | BoltCache | Redis 8.4 | BoltCache (pipeline 16) | Redis 8.4 (pipeline 16) |
-|---------|----------:|----------:|------------------------:|------------------------:|
-| SET   | 137,836/s | 128,916/s | 1,000,000/s | 799,361/s |
-| GET   | 133,067/s | 128,916/s | 1,996,008/s | 999,001/s |
-| INCR  | 137,836/s | 133,245/s | 1,331,558/s | 999,001/s |
-| LPUSH | 137,817/s | 128,949/s | 1,331,558/s | 800,000/s |
-| HSET  | 142,674/s | 128,999/s | 1,331,558/s | 799,361/s |
+Summary of the latest run (GitHub Actions, 2 server cores):
 
-Compared with BoltCache 1.0, measured with `boltcache client benchmark` (50 clients) on the same machine:
+- **Without pipelining**: BoltCache is in the top group with Dragonfly, at about half of Redis' median latency.
+- **With pipeline 16**: BoltCache leads `LPUSH`/`HSET` and is 10–18% behind single-threaded Redis on `SET`/`GET`/`INCR`.
+- **`ZADD` with pipelining** reaches only about 40% of Redis' throughput. This is a known weakness.
 
-| | 1.0 | 2.0 |
-|---|---:|---:|
-| SET | 78,456/s | 146,914/s |
-| GET | 78,813/s | 147,780/s |
-| SET, pipeline 16 | 1,189,133/s | 2,081,800/s |
-| GET, pipeline 16 | 1,132,152/s | 2,319,861/s |
+BoltCache 2.x is about twice as fast as 1.0. Measured on an M1 Pro with `boltcache client benchmark`, 50 clients: `SET` 78K → 147K ops/s and `GET` with pipeline 16 1.13M → 2.32M ops/s.
 
-Redis runs commands on one thread while BoltCache uses every core, so the gap grows with core count and with pipelining. Numbers on your hardware will differ; measure them yourself:
+Measure on your own hardware:
 
 ```bash
-redis-benchmark -p 6382 -t set,get,incr,lpush,hset -n 1000000 -c 100 -P 16 --threads 4 -q
-boltcache client benchmark --addr localhost:6382 --clients 50 --requests 500000 --pipeline 16
+bench/run.sh                                     # needs Docker; Linux recommended
+SERVER_CPUS=0-7 CLIENT_CPUS=8-15 bench/run.sh    # bigger machines
+boltcache client benchmark --addr localhost:6382 --pipeline 16   # quick check against a running server
 ```
 
 ## 🤔 When to use BoltCache
