@@ -154,4 +154,6 @@ ws.onmessage = (event) => console.log('Message:', event.data);
 
 ## CORS
 
-`server.rest.cors_enabled` and `server.rest.cors_origins` control CORS. Use `["*"]` for development only and list your front-end origins in production.
+`server.rest.cors_enabled` and `server.rest.cors_origins` control CORS. By default only the server's own origin (the built-in web client) is allowed. List your front-end origins to call the API from other sites; `["*"]` allows any website, so only use it on trusted networks.
+
+As CSRF protection, state-changing requests (anything but `GET`/`HEAD`) that carry an `Origin` header not in the list get `403`. Clients that don't send `Origin` (curl, servers, SDKs) are unaffected.

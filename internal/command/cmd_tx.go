@@ -75,6 +75,10 @@ func cmdExec(e *Engine, s *Session, _ *cache.Tx, _ []string, w resp.Writer) {
 	for i, q := range queue {
 		sp := lookup(q[0])
 		specs[i] = sp
+		if sp.flags&flagDenyOOM != 0 && e.cache.OOM() {
+			w.Error("EXECABORT Transaction discarded: " + cache.ErrOOM.Error())
+			return
+		}
 		if sp.flags&flagGlobal != 0 {
 			all = true
 		}

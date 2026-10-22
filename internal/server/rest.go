@@ -83,7 +83,7 @@ func newRESTServer(cfg *config.Config, e *command.Engine, am *auth.Manager, m *m
 	rs.upgrader = websocket.Upgrader{
 		ReadBufferSize:  4096,
 		WriteBufferSize: 4096,
-		CheckOrigin:     rs.originAllowedForWS,
+		CheckOrigin:     rs.originAllowed,
 	}
 	return rs
 }
@@ -204,6 +204,13 @@ func (rs *restServer) middleware(next http.Handler) http.Handler {
 			sw.WriteHeader(http.StatusNoContent)
 			return
 		}
+		// CSRF protection: browsers send Origin with cross-site requests, and
+		// a "simple" POST (text/plain, forms) runs without a CORS preflight.
+		// Reject state-changing requests from origins that aren't allowed.
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && !rs.originAllowed(r) {
+			rs.sendError(sw, "cross-origin request from "+r.Header.Get("Origin")+" is not allowed (server.rest.cors_origins)", http.StatusForbidden)
+			return
+		}
 		if rs.limiter != nil && !rs.limiter.allow(clientIP(r)) {
 			sw.Header().Set("Retry-After", "1")
 			rs.sendError(sw, "rate limit exceeded", http.StatusTooManyRequests)
@@ -242,7 +249,10 @@ func (rs *restServer) applyCORS(w http.ResponseWriter, r *http.Request) {
 	h.Set("Access-Control-Max-Age", "86400")
 }
 
-func (rs *restServer) originAllowedForWS(r *http.Request) bool {
+// originAllowed reports whether a request's Origin (if any) is the server
+// itself or listed in cors_origins. Used for WebSocket upgrades and to block
+// cross-site request forgery.
+func (rs *restServer) originAllowed(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
 		return true // non-browser client

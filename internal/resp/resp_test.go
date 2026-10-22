@@ -160,3 +160,44 @@ func FuzzParseCommand(f *testing.F) {
 		}
 	})
 }
+
+func TestParserIncremental(t *testing.T) {
+	big := strings.Repeat("x", 1<<20)
+	cmd := AppendCommand(nil, "SET", "k", big)
+	cmd = AppendCommand(cmd, "GET", "k")
+	var p Parser
+	var buf []byte
+	var got [][]string
+	for i := 0; i < len(cmd); i += 1000 {
+		buf = append(buf, cmd[i:min(i+1000, len(cmd))]...)
+		for {
+			if need := p.Need(); need > len(buf) {
+				break // nothing to do until enough bytes arrive
+			}
+			args, n, _, err := p.Parse(nil, buf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n == 0 {
+				break
+			}
+			got = append(got, strs(args))
+			buf = buf[n:]
+		}
+	}
+	if len(got) != 2 || len(got[0][2]) != 1<<20 || got[1][0] != "GET" {
+		t.Fatalf("parsed %d commands", len(got))
+	}
+
+	// Limits for unauthenticated clients.
+	p = Parser{MaxArgs: 10, MaxBulk: 16}
+	if _, _, _, err := p.Parse(nil, []byte("*11\r\n")); !IsProtocolError(err) {
+		t.Fatalf("too many args: %v", err)
+	}
+	if _, _, _, err := p.Parse(nil, []byte("*1\r\n$17\r\n")); !IsProtocolError(err) {
+		t.Fatalf("bulk too big: %v", err)
+	}
+	if args, _, _, err := p.Parse(nil, AppendCommand(nil, "AUTH", "token")); err != nil || len(args) != 2 {
+		t.Fatalf("small command rejected: %v", err)
+	}
+}

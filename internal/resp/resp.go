@@ -37,52 +37,122 @@ func IsProtocolError(err error) bool {
 // to dst. n is the number of bytes consumed; n == 0 with a nil error means
 // more data is needed. inline reports whether the command used the inline
 // format. Empty lines and empty arrays are consumed and return no args.
+//
+// ParseCommand is stateless: it re-parses a partial command from the start
+// on every call. Network servers should use a Parser instead.
 func ParseCommand(dst [][]byte, buf []byte) (args [][]byte, n int, inline bool, err error) {
-	if len(buf) == 0 {
-		return dst, 0, false, nil
+	var p Parser
+	return p.Parse(dst, buf)
+}
+
+// Parser parses commands incrementally. While a multibulk command is only
+// partially received it remembers the arguments already parsed and how many
+// bytes it needs next, so a large command arriving in many small reads is
+// parsed in linear time.
+//
+// Between calls the caller must keep the unconsumed bytes in place: buf has
+// to start at the same command and only grow by appending.
+type Parser struct {
+	// MaxArgs and MaxBulk limit the next command (0 = package defaults).
+	// Servers lower them for unauthenticated clients, like Redis does.
+	MaxArgs int
+	MaxBulk int
+
+	active bool // inside a multibulk command
+	count  int  // number of arguments of the current command
+	pos    int  // offset of the next unparsed argument
+	spans  []span
+	need   int // total bytes required before parsing can progress (0 = unknown)
+}
+
+type span struct{ start, end int }
+
+// Need returns how many bytes (counted from the start of the pending
+// command) must be buffered before Parse can make progress, or 0 if unknown.
+func (p *Parser) Need() int { return p.need }
+
+// Reset discards any partial command.
+func (p *Parser) Reset() {
+	p.active, p.count, p.pos, p.need = false, 0, 0, 0
+	p.spans = p.spans[:0]
+}
+
+func (p *Parser) fail(dst [][]byte, err error) ([][]byte, int, bool, error) {
+	p.Reset()
+	return dst, 0, false, err
+}
+
+// Parse works like ParseCommand but resumes partially parsed commands.
+func (p *Parser) Parse(dst [][]byte, buf []byte) (args [][]byte, n int, inline bool, err error) {
+	maxArgs, maxBulk := p.MaxArgs, p.MaxBulk
+	if maxArgs <= 0 {
+		maxArgs = MaxArgs
 	}
-	if buf[0] != '*' {
-		return parseInline(dst, buf)
+	if maxBulk <= 0 {
+		maxBulk = MaxBulkLen
 	}
-	count, pos, err := parseLength(buf, 1)
-	if err != nil || pos == 0 {
-		return dst, 0, false, err
+	if !p.active {
+		p.need = 0
+		if len(buf) == 0 {
+			return dst, 0, false, nil
+		}
+		if buf[0] != '*' {
+			return parseInline(dst, buf)
+		}
+		count, pos, err := parseLength(buf, 1)
+		if err != nil {
+			return p.fail(dst, err)
+		}
+		if pos == 0 {
+			return dst, 0, false, nil
+		}
+		if count <= 0 {
+			return dst, pos, false, nil
+		}
+		if count > maxArgs {
+			return p.fail(dst, protoErr("invalid multibulk length"))
+		}
+		p.active, p.count, p.pos = true, count, pos
+		p.spans = p.spans[:0]
 	}
-	if count <= 0 {
-		return dst, pos, false, nil
-	}
-	if count > MaxArgs {
-		return dst, 0, false, protoErr("invalid multibulk length")
-	}
-	args = dst
-	for i := 0; i < count; i++ {
+	for len(p.spans) < p.count {
+		pos := p.pos
 		if pos >= len(buf) {
+			p.need = pos + 1
 			return dst, 0, false, nil
 		}
 		if buf[pos] != '$' {
-			return dst, 0, false, protoErr("expected '$', got '" + string(buf[pos]) + "'")
+			return p.fail(dst, protoErr("expected '$', got '"+string(buf[pos])+"'"))
 		}
 		size, next, err := parseLength(buf, pos+1)
 		if err != nil {
-			return dst, 0, false, err
+			return p.fail(dst, err)
 		}
 		if next == 0 {
+			p.need = 0
 			return dst, 0, false, nil
 		}
-		if size < 0 || size > MaxBulkLen {
-			return dst, 0, false, protoErr("invalid bulk length")
+		if size < 0 || size > maxBulk {
+			return p.fail(dst, protoErr("invalid bulk length"))
 		}
 		end := next + size
 		if end+2 > len(buf) {
+			p.need = end + 2
 			return dst, 0, false, nil
 		}
 		if buf[end] != '\r' || buf[end+1] != '\n' {
-			return dst, 0, false, protoErr("bulk string not terminated by CRLF")
+			return p.fail(dst, protoErr("bulk string not terminated by CRLF"))
 		}
-		args = append(args, buf[next:end:end])
-		pos = end + 2
+		p.spans = append(p.spans, span{next, end})
+		p.pos = end + 2
 	}
-	return args, pos, false, nil
+	args = dst
+	for _, sp := range p.spans {
+		args = append(args, buf[sp.start:sp.end:sp.end])
+	}
+	n = p.pos
+	p.Reset()
+	return args, n, false, nil
 }
 
 // parseLength parses "<int>\r\n" starting at buf[start]. pos is the index

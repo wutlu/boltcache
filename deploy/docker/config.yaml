@@ -11,7 +11,7 @@ server:
   rest:
     host: "0.0.0.0"
     port: 8090
-    cors_origins: ["${BOLTCACHE_CORS_ORIGIN:-*}"]
+    cors_origins: ["${BOLTCACHE_CORS_ORIGIN:-}"]   # e.g. https://app.example.com
 
 cache:
   max_memory: "${BOLTCACHE_MAX_MEMORY:-0}"

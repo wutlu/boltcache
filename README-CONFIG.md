@@ -35,7 +35,7 @@ cache:
 | `resp.host` / `resp.port` | tcp host / `6382` | Redis protocol listener |
 | `rest.host` / `rest.port` | `0.0.0.0` / `8090` | HTTP listener |
 | `rest.cors_enabled` | `true` | Send CORS headers |
-| `rest.cors_origins` | `["*"]` | Allowed origins (also checked for WebSocket upgrades) |
+| `rest.cors_origins` | `[]` | Browser origins allowed to use the API (same origin is always allowed). Also enforced for WebSocket upgrades and, as CSRF protection, for every non-GET request that carries an `Origin` header. `"*"` allows any site. |
 | `rest.request_timeout` | `30s` | Per-request timeout (not applied to WebSockets) |
 | `rest.max_request_size` | `10MB` | Maximum request body |
 

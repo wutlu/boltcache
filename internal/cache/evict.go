@@ -57,6 +57,12 @@ func (o *Options) normalize() {
 
 func (o *Options) limited() bool { return o.MaxKeys > 0 || o.MaxMemory > 0 }
 
+// OOM reports whether writes that grow memory must be refused: the
+// noeviction policy is active and a limit is exceeded.
+func (c *BoltCache) OOM() bool {
+	return c.opts.EvictionPolicy == PolicyNoEviction && c.opts.limited() && c.overLimit()
+}
+
 func (c *BoltCache) overLimit() bool {
 	o := &c.opts
 	if o.MaxKeys > 0 && c.gkeys.Load() > o.MaxKeys {

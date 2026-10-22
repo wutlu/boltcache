@@ -71,25 +71,43 @@ func parseSetArgs(args []string) (opts cache.SetOptions, get bool, errMsg string
 			if !ok {
 				return opts, false, errNotInt
 			}
-			if n <= 0 || n > 1<<45 {
+			at, ok := expiryTime(opt, n)
+			if !ok {
 				return opts, false, fmt.Sprintf(errInvalidTime, "set")
 			}
 			expiry = true
-			switch opt {
-			case "EX":
-				opts.TTL = time.Duration(n) * time.Second
-			case "PX":
-				opts.TTL = time.Duration(n) * time.Millisecond
-			case "EXAT":
-				opts.ExpireAt = time.Unix(n, 0)
-			case "PXAT":
-				opts.ExpireAt = time.UnixMilli(n)
-			}
+			opts.ExpireAt = at
 		default:
 			return opts, false, errSyntax
 		}
 	}
 	return opts, get, ""
+}
+
+// expiryTime converts an EX/PX/EXAT/PXAT argument to an absolute time,
+// rejecting non-positive values and relative values that would overflow.
+func expiryTime(opt string, n int64) (time.Time, bool) {
+	if n <= 0 {
+		return time.Time{}, false
+	}
+	const maxNanos = 1 << 62 // ~146 years; keeps now+ttl far from int64 overflow
+	switch opt {
+	case "EX":
+		if n > maxNanos/int64(time.Second) {
+			return time.Time{}, false
+		}
+		return time.Now().Add(time.Duration(n) * time.Second), true
+	case "PX":
+		if n > maxNanos/int64(time.Millisecond) {
+			return time.Time{}, false
+		}
+		return time.Now().Add(time.Duration(n) * time.Millisecond), true
+	case "EXAT":
+		return time.Unix(min(n, 1<<40), 0), true
+	case "PXAT":
+		return time.UnixMilli(min(n, 1<<50)), true
+	}
+	return time.Time{}, false
 }
 
 func cmdSet(_ *Engine, _ *Session, db *cache.Tx, args []string, w resp.Writer) {
@@ -129,11 +147,16 @@ func cmdSetEx(unit time.Duration) handler {
 			w.Error(errNotInt)
 			return
 		}
-		if n <= 0 || n > 1<<45 {
+		opt := "EX"
+		if unit == time.Millisecond {
+			opt = "PX"
+		}
+		at, ok := expiryTime(opt, n)
+		if !ok {
 			w.Error(fmt.Sprintf(errInvalidTime, lowerASCII(args[0])))
 			return
 		}
-		if err := db.Set(args[1], args[3], time.Duration(n)*unit); err != nil {
+		if _, err := db.SetWithOptions(args[1], args[3], cache.SetOptions{ExpireAt: at}, false); err != nil {
 			writeErr(w, err)
 			return
 		}
@@ -187,23 +210,18 @@ func cmdGetEx(_ *Engine, _ *Session, db *cache.Tx, args []string, w resp.Writer)
 			w.Error(errNotInt)
 			return
 		}
-		if n <= 0 || n > 1<<45 {
-			w.Error(fmt.Sprintf(errInvalidTime, "getex"))
-			return
-		}
 		switch opt {
-		case "EX":
-			exp = time.Now().Add(time.Duration(n) * time.Second).UnixNano()
-		case "PX":
-			exp = time.Now().Add(time.Duration(n) * time.Millisecond).UnixNano()
-		case "EXAT":
-			exp = time.Unix(n, 0).UnixNano()
-		case "PXAT":
-			exp = time.UnixMilli(n).UnixNano()
+		case "EX", "PX", "EXAT", "PXAT":
 		default:
 			w.Error(errSyntax)
 			return
 		}
+		at, ok := expiryTime(opt, n)
+		if !ok {
+			w.Error(fmt.Sprintf(errInvalidTime, "getex"))
+			return
+		}
+		exp = cache.UnixNano(at)
 	}
 	var (
 		v   string

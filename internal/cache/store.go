@@ -348,7 +348,9 @@ func (t *Tx) write(key string, fn mutator) error {
 
 func (t *Tx) modify(key string, grows bool, fn mutator) error {
 	c := t.c
-	if grows && c.opts.EvictionPolicy == PolicyNoEviction && c.overLimit() {
+	// Inside Atomic the caller checked OOM before starting: refusing a later
+	// step would leave a multi-step command (LMOVE, SMOVE...) half done.
+	if grows && !t.atomic && c.OOM() {
 		return ErrOOM
 	}
 	if err := t.modifyLocked(key, fn); err != nil {
@@ -417,27 +419,29 @@ func (t *Tx) eachShard(write bool, fn func(s *shard) bool) error {
 		return ErrNotInAtomicCtx
 	}
 	for i := range t.c.shards {
-		s := &t.c.shards[i]
-		if !t.atomic {
-			if write {
-				s.mu.Lock()
-			} else {
-				s.mu.RLock()
-			}
-		}
-		cont := fn(s)
-		if !t.atomic {
-			if write {
-				s.mu.Unlock()
-			} else {
-				s.mu.RUnlock()
-			}
-		}
+		cont := true
+		t.withShard(i, write, func(s *shard) { cont = fn(s) })
 		if !cont {
 			break
 		}
 	}
 	return nil
+}
+
+// withShard runs fn on shard i, locking it unless the Atomic caller already
+// holds every shard. The deferred unlock keeps a panic from leaking the lock.
+func (t *Tx) withShard(i int, write bool, fn func(s *shard)) {
+	s := &t.c.shards[i]
+	if !t.atomic {
+		if write {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+		} else {
+			s.mu.RLock()
+			defer s.mu.RUnlock()
+		}
+	}
+	fn(s)
 }
 
 // Atomic runs fn with exclusive access to the shards owning keys (or to

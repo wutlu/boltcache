@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"runtime/debug"
@@ -117,8 +118,21 @@ func (s *Server) Start() error {
 	s.log.Info("starting BoltCache", "version", appinfo.Version, "mode", cfg.Server.Mode,
 		"auth", s.auth.Enabled(), "lua", cfg.Features.LuaScripting, "pubsub", cfg.Features.PubSub,
 		"persistence", cfg.Persistence.Enabled)
-	if !s.auth.Enabled() && !isLoopback(cfg.Server.TCP.Host) {
-		s.log.Warn("authentication is disabled; anyone who can reach this server can read and modify data (security.auth)")
+	if !s.auth.Enabled() {
+		var exposed []string
+		if cfg.TCPEnabled() && !isLoopback(cfg.Server.TCP.Host) {
+			exposed = append(exposed, cfg.GetTCPAddress())
+		}
+		if cfg.Server.RESP.IsEnabled() && !isLoopback(hostOf(cfg.GetRESPAddress())) {
+			exposed = append(exposed, cfg.GetRESPAddress())
+		}
+		if cfg.RESTEnabled() && !isLoopback(cfg.Server.REST.Host) {
+			exposed = append(exposed, cfg.GetRESTAddress())
+		}
+		if len(exposed) > 0 {
+			s.log.Warn("authentication is disabled; anyone who can reach these addresses can read and modify data (security.auth)",
+				"addrs", strings.Join(exposed, ","))
+		}
 	}
 
 	fail := func(err error) error {
@@ -152,6 +166,14 @@ func (s *Server) Start() error {
 		s.persister.Start()
 	}
 	return nil
+}
+
+func hostOf(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	return host
 }
 
 func isLoopback(host string) bool {

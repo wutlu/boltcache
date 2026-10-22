@@ -215,28 +215,26 @@ func (t *Tx) Scan(cursor uint64, pattern string, count int, kind Kind) (next uin
 	if count <= 0 {
 		count = 10
 	}
+	if cursor >= shardCount { // not a cursor we handed out: iteration is over
+		return 0, nil, nil
+	}
 	ts := now()
 	i := int(cursor)
 	for ; i < shardCount && len(keys) < count; i++ {
-		s := &t.c.shards[i]
-		if !t.atomic {
-			s.mu.RLock()
-		}
-		for k, e := range s.m {
-			if e.expired(ts) {
-				continue
+		t.withShard(i, false, func(s *shard) {
+			for k, e := range s.m {
+				if e.expired(ts) {
+					continue
+				}
+				if kind != KindNone && e.kind != kind {
+					continue
+				}
+				if pattern != "" && pattern != "*" && !glob.Match(pattern, k) {
+					continue
+				}
+				keys = append(keys, k)
 			}
-			if kind != KindNone && e.kind != kind {
-				continue
-			}
-			if pattern != "" && pattern != "*" && !glob.Match(pattern, k) {
-				continue
-			}
-			keys = append(keys, k)
-		}
-		if !t.atomic {
-			s.mu.RUnlock()
-		}
+		})
 	}
 	if i >= shardCount {
 		return 0, keys, nil
@@ -252,21 +250,16 @@ func (t *Tx) RandomKey() (string, bool, error) {
 	ts := now()
 	start := rand.IntN(shardCount)
 	for n := 0; n < shardCount; n++ {
-		s := &t.c.shards[(start+n)%shardCount]
-		if !t.atomic {
-			s.mu.RLock()
-		}
 		var found string
 		ok := false
-		for k, e := range s.m {
-			if !e.expired(ts) {
-				found, ok = k, true
-				break
+		t.withShard((start+n)%shardCount, false, func(s *shard) {
+			for k, e := range s.m {
+				if !e.expired(ts) {
+					found, ok = k, true
+					break
+				}
 			}
-		}
-		if !t.atomic {
-			s.mu.RUnlock()
-		}
+		})
 		if ok {
 			return found, true, nil
 		}
@@ -330,14 +323,14 @@ func (t *Tx) renameLocked(src, dst string, nx bool) (bool, error) {
 	if src == dst {
 		return !nx, nil
 	}
-	if nx {
-		n, err := t.Exists(dst)
-		if err != nil {
-			return false, err
-		}
-		if n > 0 {
-			return false, nil
-		}
+	// Check dst before touching src: inside a script dst may be undeclared,
+	// and failing after deleting src would lose the value.
+	n, err := t.Exists(dst)
+	if err != nil {
+		return false, err
+	}
+	if nx && n > 0 {
+		return false, nil
 	}
 	if _, err := t.Delete(src); err != nil {
 		return false, err

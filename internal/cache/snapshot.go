@@ -349,6 +349,9 @@ func (c *BoltCache) loadLegacy(raw json.RawMessage) (int, error) {
 	return loaded, nil
 }
 
+// UnixNano is t.UnixNano without overflow for dates past 2262.
+func UnixNano(t time.Time) int64 { return unixNanoClamped(t) }
+
 // unixNanoClamped is t.UnixNano without overflow for dates past 2262.
 func unixNanoClamped(t time.Time) int64 {
 	if t.After(time.Unix(0, math.MaxInt64)) {

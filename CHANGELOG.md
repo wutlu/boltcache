@@ -13,7 +13,7 @@ BoltCache 2.0 is a ground-up rework of the engine, the network layer and the too
 - **Atomicity everywhere**: every command runs under its key's shard lock; multi-key commands, transactions and scripts lock all their keys in a fixed order, so they're atomic and can't deadlock.
 - **Eviction and limits**: `cache.max_memory` and `cache.max_keys` are now enforced with `lru`, `lfu`, `random`, `ttl` or the new `noeviction` policy.
 - **Crash-safe, typed persistence**: snapshots keep value types and binary data, are written atomically (temp file + fsync + rename), can be gzipped and are skipped when nothing changed. 1.x snapshots are converted automatically.
-- **Security**: token authentication is enforced on REST, RESP and TCP; CORS allow-list (also for WebSockets), per-IP rate limiting, request size limits, HTTPS for the REST API, constant-time token checks.
+- **Security**: token authentication is enforced on REST, RESP and TCP; CORS allow-list (also for WebSockets) with CSRF protection, per-IP rate limiting, request size limits (strict ones for unauthenticated clients), HTTPS for the REST API, constant-time token checks, sandboxed Lua.
 - **Observability**: Prometheus `/metrics`, `/health` and `/ready`, structured logging with `log/slog` (text/JSON), optional pprof.
 - **Distribution**: prebuilt binaries for Linux, macOS, Windows and FreeBSD (amd64/arm64), multi-arch distroless images on `ghcr.io/wutlu/boltcache`, `go install github.com/wutlu/boltcache@latest`.
 
@@ -52,7 +52,7 @@ BoltCache 2.0 is a ground-up rework of the engine, the network layer and the too
 - **Breaking**: the separate gnet text listener on `tcp.port + 1` (6381) was removed; port 6380 now runs on gnet and serves both protocols.
 - **Breaking**: the `cluster` command was removed. It started an isolated node and never replicated data; replication is on the roadmap.
 - `gorilla/mux` was replaced with the standard library router; `gopkg.in/yaml.v3` (archived) with `go.yaml.in/yaml/v3`. All dependencies were updated.
-- Defaults: `server.mode` is `both`, the REST port is 8090 everywhere, `eviction_threshold` is 1.0, snapshot compression is off.
+- Defaults: `server.mode` is `both`, the REST port is 8090 everywhere, `eviction_threshold` is 1.0, snapshot compression is off, and `cors_origins` is empty (same origin only) instead of `*`, so web pages you visit can't use a local BoltCache. Non-GET requests from origins that aren't allowed get `403`.
 - The Docker image is distroless, runs as non-root, is multi-arch and is configured through `BOLTCACHE_*` environment variables; `docker-compose.yml` was fixed.
 - Swagger UI assets are pinned to a fixed version; the OpenAPI document covers every endpoint and declares the auth schemes.
 

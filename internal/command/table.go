@@ -26,7 +26,17 @@ const (
 	flagPubSubCmd                     // requires features.pub_sub
 	flagAdmin                         // administrative
 	flagFast                          // O(1)/O(log n)
+	flagDenyOOM                       // refused when the noeviction memory limit is reached
 )
+
+// Write commands that can't grow memory stay allowed when the noeviction
+// limit is reached, so clients can free space.
+var shrinking = map[string]bool{
+	"del": true, "unlink": true, "lpop": true, "rpop": true, "srem": true, "spop": true,
+	"hdel": true, "getdel": true, "ltrim": true, "lrem": true, "persist": true,
+	"expire": true, "pexpire": true, "expireat": true, "pexpireat": true,
+	"flushall": true, "flushdb": true, "rename": true, "renamenx": true,
+}
 
 type spec struct {
 	name  string
@@ -78,6 +88,9 @@ func register(name string, fn handler, arity int, flags flag, first, last, step 
 	sp := &spec{name: name, fn: fn, arity: arity, flags: flags, first: first, last: last, step: step}
 	if first == 0 {
 		sp.flags |= flagNoKeys
+	}
+	if flags&flagWrite != 0 && !shrinking[name] {
+		sp.flags |= flagDenyOOM
 	}
 	table[name] = sp
 	return sp

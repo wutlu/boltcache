@@ -680,3 +680,24 @@ func BenchmarkGetParallel(b *testing.B) {
 		}
 	})
 }
+
+func TestRenameToUndeclaredKeyKeepsSource(t *testing.T) {
+	c := newTestCache(t, Options{})
+	_ = c.Set("src", "keep", 0)
+	dst := ""
+	for i := 0; dst == ""; i++ {
+		if k := fmt.Sprint("dst", i); c.shardIndex(k) != c.shardIndex("src") {
+			dst = k
+		}
+	}
+	err := c.Atomic([]string{"src"}, false, func(tx *Tx) error {
+		_, err := tx.Rename("src", dst, false)
+		return err
+	})
+	if !errors.Is(err, ErrUndeclaredKey) {
+		t.Fatalf("err = %v", err)
+	}
+	if v, ok, _ := c.Get("src"); !ok || v != "keep" {
+		t.Fatalf("source lost: %q %v", v, ok)
+	}
+}

@@ -244,6 +244,11 @@ func (e *Engine) run(s *Session, sp *spec, args []string, w resp.Writer) {
 		w.Error(msg)
 		return
 	}
+	if s.tx == nil && sp.flags&flagDenyOOM != 0 && e.cache.OOM() {
+		e.rejected.Add(1)
+		w.Error(cache.ErrOOM.Error())
+		return
+	}
 	e.commands.Add(1)
 	if s.tx != nil {
 		sp.fn(e, s, s.tx, args, w)

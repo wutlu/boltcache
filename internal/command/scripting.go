@@ -32,8 +32,8 @@ import (
 
 func registerScriptCommands() {
 	const f = flagScripting | flagNoScript
-	register("eval", cmdEval(false, false), -3, f, 0, 0, 0).getKeys = evalKeys
-	register("evalsha", cmdEval(true, false), -3, f, 0, 0, 0).getKeys = evalKeys
+	register("eval", cmdEval(false, false), -3, f|flagDenyOOM, 0, 0, 0).getKeys = evalKeys
+	register("evalsha", cmdEval(true, false), -3, f|flagDenyOOM, 0, 0, 0).getKeys = evalKeys
 	register("eval_ro", cmdEval(false, true), -3, f, 0, 0, 0).getKeys = evalKeys
 	register("evalsha_ro", cmdEval(true, true), -3, f, 0, 0, 0).getKeys = evalKeys
 	register("script", cmdScript, -2, f, 0, 0, 0)
@@ -120,9 +120,19 @@ func oneLine(s string) string { return strings.ReplaceAll(strings.TrimSpace(s), 
 // vm is a pooled Lua state. cur points at the running script's context so
 // the redis.* functions (created once per state) can reach it.
 type vm struct {
-	L   *lua.LState
-	cur *scriptRun
+	L     *lua.LState
+	cur   *scriptRun
+	libs  map[string]*lua.LTable // locked metatables {__index = library}, one per library
+	envMT *lua.LTable            // locked metatable {__index = globals} for run environments
 }
+
+// sandboxedLibs are replaced in every run's environment by empty proxy
+// tables that read through to the real library, so a script that modifies
+// them (redis.call = ..., string.format = ...) only changes its own proxy.
+var sandboxedLibs = []string{"redis", lua.StringLibName, lua.TabLibName, lua.MathLibName}
+
+// maxLuaString bounds string.rep results (same as the largest bulk string).
+const maxLuaString = 512 << 20
 
 type scriptRun struct {
 	e        *Engine
@@ -145,11 +155,30 @@ func newVM() *vm {
 		L.Push(lua.LString(lib.name))
 		L.Call(1, 0)
 	}
-	// Sandbox: no filesystem access, no dynamic code loading, no output.
-	for _, name := range []string{"dofile", "loadfile", "load", "loadstring", "print", "module", "require", "collectgarbage"} {
+	// Sandbox: no filesystem access, no dynamic code loading, no output and
+	// no way to reach the real global table (getfenv/setfenv).
+	for _, name := range []string{"dofile", "loadfile", "load", "loadstring", "print", "module", "require",
+		"collectgarbage", "getfenv", "setfenv", "newproxy"} {
 		L.SetGlobal(name, lua.LNil)
 	}
-	v := &vm{L: L}
+	strlib := L.GetGlobal(lua.StringLibName).(*lua.LTable)
+	rep := strlib.RawGetString("rep").(*lua.LFunction)
+	strlib.RawSetString("rep", L.NewFunction(func(L *lua.LState) int {
+		if n := L.CheckInt(2); n > 0 && int64(len(L.CheckString(1)))*int64(n) > maxLuaString {
+			L.RaiseError("string.rep result too large")
+		}
+		L.Push(rep)
+		L.Push(L.Get(1))
+		L.Push(L.Get(2))
+		L.Call(2, 1)
+		return 1
+	}))
+	// Lock the string metatable: getmetatable("").__index would otherwise
+	// hand out the shared string library.
+	if mt, ok := L.GetMetatable(lua.LString("")).(*lua.LTable); ok {
+		mt.RawSetString("__metatable", lua.LFalse)
+	}
+	v := &vm{L: L, libs: map[string]*lua.LTable{}}
 	redis := L.NewTable()
 	L.SetFuncs(redis, map[string]lua.LGFunction{
 		"call":         func(L *lua.LState) int { return v.call(L, false) },
@@ -164,7 +193,20 @@ func newVM() *vm {
 		redis.RawSetString(lvl, lua.LNumber(i))
 	}
 	L.SetGlobal("redis", redis)
+	for _, name := range sandboxedLibs {
+		v.libs[name] = lockedIndex(L, L.GetGlobal(name))
+	}
+	v.envMT = lockedIndex(L, L.Get(lua.GlobalsIndex))
 	return v
+}
+
+// lockedIndex returns a metatable reading through to target whose
+// getmetatable() is hidden, so scripts can't reach target to modify it.
+func lockedIndex(L *lua.LState, target lua.LValue) *lua.LTable {
+	mt := L.CreateTable(0, 2)
+	mt.RawSetString("__index", target)
+	mt.RawSetString("__metatable", lua.LFalse)
+	return mt
 }
 
 func luaStatusReply(L *lua.LState) int {
@@ -358,10 +400,16 @@ func (e *Engine) execScript(s *Session, tx *cache.Tx, proto *lua.FunctionProto, 
 	ctx, cancel := context.WithTimeout(context.Background(), e.cfg.ScriptTimeout)
 	L.SetContext(ctx)
 
-	env := L.NewTable()
-	mt := L.NewTable()
-	mt.RawSetString("__index", L.Get(lua.GlobalsIndex))
-	L.SetMetatable(env, mt)
+	// Each run gets its own environment: globals it defines, and changes to
+	// the library tables, are discarded afterwards.
+	env := L.CreateTable(0, 8)
+	L.SetMetatable(env, v.envMT)
+	for name, mt := range v.libs {
+		proxy := L.CreateTable(0, 0)
+		L.SetMetatable(proxy, mt)
+		env.RawSetString(name, proxy)
+	}
+	env.RawSetString("_G", env)
 	env.RawSetString("KEYS", stringsTable(L, keys))
 	env.RawSetString("ARGV", stringsTable(L, argv))
 	fn := L.NewFunctionFromProto(proto)

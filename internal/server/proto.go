@@ -21,6 +21,15 @@ import (
 // Redis' client-output-buffer-limit for pubsub clients).
 const maxPendingPush = 32 << 20
 
+const (
+	// Request limits for clients that haven't authenticated (when auth is
+	// enabled), so they can't make the server buffer large payloads.
+	unauthMaxArgs = 10
+	unauthMaxBulk = 16 << 10
+	// maxQueryBuffer bounds a single pending command (Redis: 1GB).
+	maxQueryBuffer = 1 << 30
+)
+
 // protoServer serves the RESP protocol and, when legacyText is set, the
 // BoltCache 1.x text protocol, on an event-driven gnet listener. Every
 // connection speaks RESP when the client sends RESP arrays; inline commands
@@ -49,6 +58,8 @@ type protoConn struct {
 	session *command.Session
 	enc     resp.Encoder
 	args    [][]byte
+	parser  resp.Parser
+	in      []byte // unconsumed input (a partially received command)
 
 	textPush atomic.Bool  // deliver pub/sub messages in the legacy format
 	pending  atomic.Int64 // queued async push bytes
@@ -142,11 +153,29 @@ func (ps *protoServer) OnTraffic(gc gnet.Conn) (action gnet.Action) {
 		}
 	}()
 
-	buf, _ := gc.Peek(-1)
+	// Take everything gnet has buffered. When a command is incomplete the
+	// remainder is kept in pc.in; gnet's Peek would instead copy all pending
+	// data on every read, which is quadratic for large commands.
+	data, _ := gc.Next(-1)
+	buf, owned := data, false
+	if len(pc.in) > 0 {
+		pc.in = append(pc.in, data...)
+		buf, owned = pc.in, true
+	}
+
 	consumed := 0
 	pc.enc.Buf = pc.enc.Buf[:0]
 	for consumed < len(buf) {
-		args, n, inline, err := resp.ParseCommand(pc.args[:0], buf[consumed:])
+		if need := pc.parser.Need(); need > len(buf)-consumed {
+			break // the pending command can't be complete yet
+		}
+		if pc.session.Authenticated {
+			pc.parser.MaxArgs, pc.parser.MaxBulk = 0, 0
+		} else {
+			// Like Redis: unauthenticated clients can't send big requests.
+			pc.parser.MaxArgs, pc.parser.MaxBulk = unauthMaxArgs, unauthMaxBulk
+		}
+		args, n, inline, err := pc.parser.Parse(pc.args[:0], buf[consumed:])
 		pc.args = args[:0]
 		if err != nil {
 			pc.enc.Error(err.Error())
@@ -174,11 +203,28 @@ func (ps *protoServer) OnTraffic(gc gnet.Conn) (action gnet.Action) {
 			pc.enc.Buf = pc.enc.Buf[:0]
 		}
 	}
-	// Careful: gnet's Discard(0) discards the whole buffer, which would drop
-	// a partially received command.
-	if consumed > 0 {
-		_, _ = gc.Discard(consumed)
+
+	// Keep the unconsumed tail (the start of an incomplete command).
+	rest := buf[consumed:]
+	switch {
+	case len(rest) == 0:
+		pc.in = pc.in[:0]
+		if cap(pc.in) > 1<<20 {
+			pc.in = nil
+		}
+	case owned:
+		if consumed > 0 {
+			pc.in = pc.in[:copy(pc.in, rest)]
+		}
+	default:
+		pc.in = append(pc.in[:0], rest...)
 	}
+	if len(pc.in) > maxQueryBuffer {
+		pc.enc.Error("ERR Protocol error: query buffer limit exceeded")
+		_, _ = gc.Write(pc.enc.Buf)
+		return gnet.Close
+	}
+
 	if len(pc.enc.Buf) > 0 {
 		_, _ = gc.Write(pc.enc.Buf)
 	}

@@ -689,3 +689,62 @@ func TestConcurrentClients(t *testing.T) {
 		t.Fatalf("lost updates: %d", total)
 	}
 }
+
+func TestCSRFAndUnauthenticatedLimits(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.Server.REST.CORSOrigins = []string{"https://app.example.com"}
+	ts := startServer(t, cfg)
+	post := func(origin string) int {
+		req, _ := http.NewRequest("POST", ts.rest+"/command", strings.NewReader(`["SET","x","1"]`))
+		req.Header.Set("Content-Type", "text/plain")
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+	if code := post("https://evil.example.com"); code != 403 {
+		t.Fatalf("cross-site POST = %d", code)
+	}
+	if code := post("https://app.example.com"); code != 200 {
+		t.Fatalf("allowed origin POST = %d", code)
+	}
+	if code := post(""); code != 200 {
+		t.Fatalf("POST without Origin = %d", code)
+	}
+	if code := post(ts.rest); code != 200 {
+		t.Fatalf("same-origin POST = %d", code)
+	}
+
+	// With auth on, unauthenticated clients can't send large requests.
+	cfg2 := testConfig(t)
+	cfg2.Security.Auth.Enabled = true
+	cfg2.Security.Auth.Tokens = []string{"tok"}
+	ts2 := startServer(t, cfg2)
+	conn, err := net.Dial("tcp", ts2.resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_, _ = conn.Write(resp.AppendCommand(nil, "SET", "k", strings.Repeat("x", 1<<20)))
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	v, err := resp.ReadValue(bufio.NewReader(conn))
+	if err != nil || !strings.Contains(v.Str, "Protocol error") {
+		t.Fatalf("unauthenticated big request: %+v %v", v, err)
+	}
+	if err := goRedis(t, ts2.resp, "tok").Set(context.Background(), "k", strings.Repeat("x", 1<<20), 0).Err(); err != nil {
+		t.Fatalf("authenticated big request: %v", err)
+	}
+}
+
+func TestRESPListenerFollowsTCPHost(t *testing.T) {
+	cfg := config.Default()
+	cfg.Server.TCP.Host = "127.0.0.1"
+	if got := cfg.GetRESPAddress(); got != "127.0.0.1:6382" {
+		t.Fatalf("RESP address = %s", got)
+	}
+}

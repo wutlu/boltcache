@@ -14,12 +14,12 @@ import (
 )
 
 type harness struct {
-	t *testing.T
+	t testing.TB
 	e *Engine
 	s *Session
 }
 
-func newHarness(t *testing.T, cfg Config) *harness {
+func newHarness(t testing.TB, cfg Config) *harness {
 	t.Helper()
 	c := cache.New(cache.Options{})
 	t.Cleanup(c.Close)
@@ -458,4 +458,63 @@ func TestServerCommands(t *testing.T) {
 	if !h.s.Close {
 		t.Error("QUIT didn't mark session closed")
 	}
+}
+
+func TestReviewRegressions(t *testing.T) {
+	h := newHarness(t, Config{})
+	// Huge relative expirations used to overflow into "no TTL" or a tiny TTL.
+	h.expect("!ERR invalid expire time in 'set' command", "SET", "a", "v", "EX", "10000000000")
+	h.do("SET", "g", "v")
+	h.expect("!ERR invalid expire time in 'getex' command", "GETEX", "g", "EX", "18446744074")
+	h.expect(`"v"`, "GET", "g")
+	h.expect("OK", "SET", "far", "v", "EXAT", "99999999999")
+	if v := h.do("TTL", "far"); v.Int <= 0 {
+		t.Errorf("EXAT far future TTL = %d", v.Int)
+	}
+	h.expect("!ERR invalid expire time in 'setex' command", "SETEX", "a", "10000000000", "v")
+
+	// SCAN with a cursor we never handed out ends the iteration.
+	h.expect(`["0" []]`, "SCAN", "18446744073709551615")
+}
+
+func TestNoEvictionMultiStepCommands(t *testing.T) {
+	c := cache.New(cache.Options{MaxMemory: 2000, EvictionPolicy: cache.PolicyNoEviction})
+	t.Cleanup(c.Close)
+	h := &harness{t: t, e: New(c, nil, Config{LuaEnabled: true})}
+	h.s = h.e.NewSession("t", nil)
+	h.do("RPUSH", "src", "a", "b", "c")
+	h.do("SADD", "set", "m")
+	h.do("SET", "filler", strings.Repeat("x", 3000)) // goes over the limit
+	h.expectPrefix("!OOM", "SET", "x", "y")
+	h.expectPrefix("!OOM", "LMOVE", "src", "dst", "LEFT", "RIGHT")
+	h.expect(`["a" "b" "c"]`, "LRANGE", "src", "0", "-1") // nothing lost
+	h.expectPrefix("!OOM", "SMOVE", "set", "set2", "m")
+	h.expect(`["m"]`, "SMEMBERS", "set")
+	h.expectPrefix("!OOM", "EVAL", "return 1", "0")
+	h.expect("1", "DEL", "filler") // freeing memory is allowed
+	h.expect(`"a"`, "LMOVE", "src", "dst", "LEFT", "RIGHT")
+}
+
+func TestScriptSandboxIsolation(t *testing.T) {
+	h := newHarness(t, Config{})
+	h.do("SET", "k", "v")
+	attacks := []string{
+		"redis.call = function() return 'hijacked' end",
+		"string.upper = function() return 'hijacked' end",
+		"_G.tostring = function() return 'hijacked' end",
+		"local mt = getmetatable(_G); if mt then mt.__index.tostring = function() return 'hijacked' end end",
+		"local smt = getmetatable(''); if smt then smt.__index.upper = function() return 'hijacked' end end",
+		"rawset(_G, 'type', function() return 'hijacked' end)",
+	}
+	for _, a := range attacks {
+		h.do("EVAL", a, "0")
+	}
+	h.expect(`"v"`, "EVAL", "return redis.call('GET', KEYS[1])", "1", "k")
+	h.expect(`"ABC"`, "EVAL", "return string.upper('abc')", "0")
+	h.expect(`"ABC"`, "EVAL", "return ('abc'):upper()", "0")
+	h.expect(`"1"`, "EVAL", "return tostring(1)", "0")
+	h.expect(`"number"`, "EVAL", "return type(1)", "0")
+	h.expectPrefix("!ERR Error running script", "EVAL", "return string.rep('x', 1e10)", "0")
+	h.expect("3", "EVAL", "return #string.rep('x', 3)", "0")
+	h.expectPrefix("!ERR Error running script", "EVAL", "return getfenv(0)", "0")
 }

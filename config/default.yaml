@@ -27,7 +27,10 @@ server:
     host: "0.0.0.0"
     port: 8090
     cors_enabled: true
-    cors_origins: ["*"]      # list allowed origins in production
+    # Origins allowed to call the API from a browser, e.g.
+    # ["https://app.example.com"]. Empty = same origin only (the built-in web
+    # client works). "*" allows any web page you visit to use the API.
+    cors_origins: []
     request_timeout: "30s"
     max_request_size: "10MB"
 

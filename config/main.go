@@ -28,14 +28,14 @@ func Default() *Config {
 				WriteTimeout:   30 * time.Second,
 			},
 			RESP: RESPConfig{
-				Host: "0.0.0.0",
+				Host: "", // empty = same as tcp.host
 				Port: 6382,
 			},
 			REST: RESTConfig{
 				Host:           "0.0.0.0",
 				Port:           8090,
 				CORSEnabled:    true,
-				CORSOrigins:    []string{"*"},
+				CORSOrigins:    []string{}, // same-origin only; list front-end origins to allow them
 				RequestTimeout: 30 * time.Second,
 				MaxRequestSize: "10MB",
 			},
