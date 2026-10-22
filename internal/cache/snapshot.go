@@ -48,6 +48,7 @@ type snapEntry struct {
 	L []string          `json:"l,omitempty"`
 	M []string          `json:"m,omitempty"`
 	H map[string]string `json:"h,omitempty"`
+	Z []string          `json:"z,omitempty"` // sorted set: member, score, member, score...
 	X int64             `json:"x,omitempty"`
 	B bool              `json:"b,omitempty"`
 }
@@ -109,6 +110,11 @@ func toSnapEntry(k string, e *entry) snapEntry {
 		for f, v := range e.hash {
 			se.H[f] = v
 		}
+	case KindZSet:
+		se.Z = make([]string, 0, 2*len(e.zset.dict))
+		for m, s := range e.zset.dict {
+			se.Z = append(se.Z, m, strconv.FormatFloat(s, 'g', -1, 64))
+		}
 	}
 	return se
 }
@@ -129,6 +135,9 @@ func encodeBinary(se snapEntry) snapEntry {
 	for i, v := range se.M {
 		se.M[i] = b64([]byte(v))
 	}
+	for i := 0; i < len(se.Z); i += 2 {
+		se.Z[i] = b64([]byte(se.Z[i]))
+	}
 	if se.H != nil {
 		h := make(map[string]string, len(se.H))
 		for f, v := range se.H {
@@ -142,6 +151,11 @@ func encodeBinary(se snapEntry) snapEntry {
 func allUTF8(se snapEntry) bool {
 	if !utf8.ValidString(se.K) || !utf8.ValidString(se.S) {
 		return false
+	}
+	for i := 0; i < len(se.Z); i += 2 {
+		if !utf8.ValidString(se.Z[i]) {
+			return false
+		}
 	}
 	for _, v := range se.L {
 		if !utf8.ValidString(v) {
@@ -186,6 +200,11 @@ func decodeBinary(se *snapEntry) error {
 			return err
 		}
 	}
+	for i := 0; i < len(se.Z); i += 2 {
+		if se.Z[i], err = dec(se.Z[i]); err != nil {
+			return err
+		}
+	}
 	if se.H != nil {
 		h := make(map[string]string, len(se.H))
 		for f, v := range se.H {
@@ -227,6 +246,18 @@ func fromSnapEntry(se snapEntry) (*entry, error) {
 			e.hash[f] = v
 			e.size += hashFieldSize(f, v)
 		}
+	case "zset":
+		if len(se.Z)%2 != 0 {
+			return nil, fmt.Errorf("sorted set %q has an odd number of fields", se.K)
+		}
+		e = newZSet(se.K)
+		for i := 0; i < len(se.Z); i += 2 {
+			score, err := strconv.ParseFloat(se.Z[i+1], 64)
+			if err != nil || math.IsNaN(score) {
+				return nil, fmt.Errorf("sorted set %q: invalid score %q", se.K, se.Z[i+1])
+			}
+			e.zsetPut(se.Z[i], score)
+		}
 	default:
 		return nil, fmt.Errorf("unknown type %q for key %q", se.T, se.K)
 	}
@@ -253,6 +284,10 @@ func (c *BoltCache) restore(key string, e *entry) bool {
 		}
 	case KindHash:
 		if len(e.hash) == 0 {
+			return false
+		}
+	case KindZSet:
+		if len(e.zset.dict) == 0 {
 			return false
 		}
 	}

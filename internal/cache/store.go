@@ -29,6 +29,7 @@ const (
 	KindList
 	KindSet
 	KindHash
+	KindZSet
 )
 
 func (k Kind) String() string {
@@ -41,6 +42,8 @@ func (k Kind) String() string {
 		return "set"
 	case KindHash:
 		return "hash"
+	case KindZSet:
+		return "zset"
 	}
 	return "none"
 }
@@ -73,6 +76,7 @@ type entry struct {
 	list     *deque
 	set      map[string]struct{}
 	hash     map[string]string
+	zset     *zset
 	expireAt int64 // unix nanoseconds, 0 = persistent
 	size     int64 // approximate bytes, including key
 

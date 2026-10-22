@@ -194,6 +194,8 @@ func scanOptions(args []string, allowType bool) (pattern string, count int, kind
 				kind = cache.KindSet
 			case "hash":
 				kind = cache.KindHash
+			case "zset":
+				kind = cache.KindZSet
 			default:
 				kind = 255 // unknown type: matches nothing
 			}
