@@ -59,7 +59,8 @@ type protoConn struct {
 	enc     resp.Encoder
 	args    [][]byte
 	parser  resp.Parser
-	in      []byte // unconsumed input (a partially received command)
+	in      []byte     // unconsumed input (a partially received command)
+	batch   [][]string // commands parsed in the current read
 
 	textPush atomic.Bool  // deliver pub/sub messages in the legacy format
 	pending  atomic.Int64 // queued async push bytes
@@ -165,7 +166,16 @@ func (ps *protoServer) OnTraffic(gc gnet.Conn) (action gnet.Action) {
 
 	consumed := 0
 	pc.enc.Buf = pc.enc.Buf[:0]
-	for consumed < len(buf) {
+	// RESP commands are collected and run as one pipeline so the engine can
+	// batch commands that hit the same shard (see Engine.ExecPipeline).
+	batch := pc.batch[:0]
+	flush := func() {
+		if len(batch) > 0 {
+			ps.engine.ExecPipeline(pc.session, batch, &pc.enc)
+			batch = batch[:0]
+		}
+	}
+	for consumed < len(buf) && !pc.session.Close {
 		if need := pc.parser.Need(); need > len(buf)-consumed {
 			break // the pending command can't be complete yet
 		}
@@ -178,6 +188,7 @@ func (ps *protoServer) OnTraffic(gc gnet.Conn) (action gnet.Action) {
 		args, n, inline, err := pc.parser.Parse(pc.args[:0], buf[consumed:])
 		pc.args = args[:0]
 		if err != nil {
+			flush()
 			pc.enc.Error(err.Error())
 			_, _ = gc.Write(pc.enc.Buf)
 			return gnet.Close
@@ -190,18 +201,25 @@ func (ps *protoServer) OnTraffic(gc gnet.Conn) (action gnet.Action) {
 			continue
 		}
 		if inline && ps.legacyText {
+			flush()
 			pc.execText(args)
-		} else {
-			ps.engine.Exec(pc.session, args, &pc.enc)
+			continue
 		}
-		if pc.session.Close {
-			_, _ = gc.Write(pc.enc.Buf)
-			return gnet.Close
+		cmd := make([]string, len(args))
+		for i, a := range args {
+			cmd[i] = string(a)
 		}
-		if len(pc.enc.Buf) > 256<<10 {
-			_, _ = gc.Write(pc.enc.Buf)
-			pc.enc.Buf = pc.enc.Buf[:0]
+		batch = append(batch, cmd)
+		// AUTH/HELLO change what the parser accepts for the next command.
+		if !pc.session.Authenticated || len(batch) >= 1024 {
+			flush()
 		}
+	}
+	flush()
+	pc.batch = batch[:0]
+	if pc.session.Close {
+		_, _ = gc.Write(pc.enc.Buf)
+		return gnet.Close
 	}
 
 	// Keep the unconsumed tail (the start of an incomplete command).

@@ -53,3 +53,6 @@ config-local.yaml
 benchmark/
 # Release artifacts
 dist/
+
+# Benchmark output
+bench/results/

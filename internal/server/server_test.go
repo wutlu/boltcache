@@ -748,3 +748,44 @@ func TestRESPListenerFollowsTCPHost(t *testing.T) {
 		t.Fatalf("RESP address = %s", got)
 	}
 }
+
+func TestSortedSetsEndToEnd(t *testing.T) {
+	cfg := testConfig(t)
+	ts := startServer(t, cfg)
+	ctx := context.Background()
+	rdb := goRedis(t, ts.resp, "")
+	rdb.ZAdd(ctx, "board", redis.Z{Score: 100, Member: "ada"}, redis.Z{Score: 250, Member: "bob"}, redis.Z{Score: 175, Member: "cy"})
+	top, err := rdb.ZRevRangeWithScores(ctx, "board", 0, 1).Result()
+	if err != nil || len(top) != 2 || top[0].Member != "bob" || top[0].Score != 250 || top[1].Member != "cy" {
+		t.Fatalf("top = %v %v", top, err)
+	}
+	if r := rdb.ZRank(ctx, "board", "cy").Val(); r != 1 {
+		t.Fatalf("rank = %d", r)
+	}
+	byScore := rdb.ZRangeArgs(ctx, redis.ZRangeArgs{Key: "board", Start: "(100", Stop: "+inf", ByScore: true}).Val()
+	if strings.Join(byScore, ",") != "cy,bob" {
+		t.Fatalf("byscore = %v", byScore)
+	}
+	res, _ := http.Get(ts.rest + "/cache/board")
+	var out struct {
+		Value []struct {
+			Member string
+			Score  float64
+		}
+	}
+	_ = json.NewDecoder(res.Body).Decode(&out)
+	res.Body.Close()
+	if len(out.Value) != 3 || out.Value[0].Member != "ada" || out.Value[2].Score != 250 {
+		t.Fatalf("REST zset = %+v", out)
+	}
+
+	// Survives a restart.
+	rdb.Close()
+	ts.stop(t)
+	cfg2 := testConfig(t)
+	cfg2.Persistence.File = cfg.Persistence.File
+	ts2 := startServer(t, cfg2)
+	if s := goRedis(t, ts2.resp, "").ZScore(ctx, "board", "cy").Val(); s != 175 {
+		t.Fatalf("score after restart = %v", s)
+	}
+}

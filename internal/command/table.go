@@ -159,6 +159,7 @@ func init() {
 	registerListCommands()
 	registerSetCommands()
 	registerHashCommands()
+	registerZSetCommands()
 	registerServerCommands()
 	registerPubSubCommands()
 	registerScriptCommands()

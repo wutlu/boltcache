@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [2.1.0] - 2026-10-22
+
+### Added
+
+- **Sorted sets**: `ZADD` (NX/XX/GT/LT/CH/INCR), `ZINCRBY`, `ZSCORE`, `ZMSCORE`, `ZCARD`, `ZCOUNT`, `ZRANK`/`ZREVRANK` (WITHSCORE), `ZREM`, `ZRANGE` (BYSCORE/REV/LIMIT/WITHSCORES), `ZREVRANGE`, `ZRANGEBYSCORE`, `ZREVRANGEBYSCORE`, `ZPOPMIN`/`ZPOPMAX`, `ZREMRANGEBYRANK`/`ZREMRANGEBYSCORE` and `ZSCAN`. They're backed by a skiplist with O(log n) ranks, persisted in snapshots, filterable with `SCAN ... TYPE zset` and returned by `GET /cache/{key}`.
+- **Reproducible benchmarks**: `bench/run.sh` compares BoltCache with Redis (with and without I/O threads), Valkey and Dragonfly under the same pinned CPU budget, and a GitHub Actions workflow runs it. Results and methodology are in [BENCHMARKS.md](BENCHMARKS.md).
+- README sections on project status, when (not) to use BoltCache with a comparison to Redis/Valkey, Dragonfly, NATS and etcd, and how the project is built and verified.
+- Issue templates; private vulnerability reporting is enabled.
+
+### Performance
+
+- Commands pipelined by a client that hit the same shard now run under a single lock acquisition, and shard locks spin briefly before blocking. This removes most lock contention on hot keys. On an M1 Pro, unpipelined `ZADD` to one key went from 55K to 114K ops/s, and pipelined `HSET` from 800K to 1.33M.
+- Skiplist nodes embed their level arrays, so a random insert into a 100K-member sorted set takes 2.4 µs instead of 3.2 µs.
+
+### Changed
+
+- Performance claims in the README now come only from the reproducible benchmark, including where BoltCache is slower: pipelined `ZADD`, and `SET`/`GET` on 2 cores.
+
 ## [2.0.1] - 2026-10-22
 
 ### Fixed
@@ -11,7 +29,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [2.0.0] - 2026-10-22
 
-BoltCache 2.0 is a ground-up rework of the engine, the network layer and the tooling. It is now a real Redis-compatible server: `redis-cli`, `redis-benchmark`, go-redis and other clients work against it, with real Lua scripting, transactions, eviction and crash-safe persistence. It is also about **2x faster** than 1.0 and outperforms Redis 8.4 on a multi-core machine in `redis-benchmark` (see the README for numbers and methodology).
+BoltCache 2.0 is a ground-up rework of the engine, the network layer and the tooling. It is now a real Redis-compatible server: `redis-cli`, `redis-benchmark`, go-redis and other clients work against it, with real Lua scripting, transactions, eviction and crash-safe persistence. It is also about **2x faster** than 1.0 and outperformed a default (single-threaded) Redis 8.4 in `redis-benchmark` on one 10-core Mac with client and server on the same machine. See [BENCHMARKS.md](BENCHMARKS.md) for the reproducible comparison added in 2.1, which is less flattering.
 
 ### Highlights
 
@@ -67,6 +85,7 @@ BoltCache 2.0 is a ground-up rework of the engine, the network layer and the too
 
 Initial release.
 
+[2.1.0]: https://github.com/wutlu/boltcache/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/wutlu/boltcache/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/wutlu/boltcache/compare/e6a00dc...v2.0.0
 [1.0.0]: https://github.com/wutlu/boltcache/commit/f13537c

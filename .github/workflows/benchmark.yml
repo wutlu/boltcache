@@ -1,0 +1,42 @@
+name: Benchmark
+
+# Runs bench/run.sh: BoltCache vs Redis, Valkey and Dragonfly with the same
+# CPU budget. Results appear in the job summary and as an artifact.
+on:
+  workflow_dispatch:
+    inputs:
+      rounds:
+        description: Rounds per scenario (median is reported)
+        default: "3"
+  pull_request:
+    paths:
+      - bench/**
+      - .github/workflows/benchmark.yml
+      # performance-critical code
+      - internal/cache/**
+      - internal/server/proto.go
+      - internal/resp/**
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - name: Machine
+        run: lscpu | head -20 && nproc && free -h
+      - name: Run benchmark
+        env:
+          ROUNDS: ${{ inputs.rounds || '3' }}
+          SERVER_CPUS: "0,1"
+          CLIENT_CPUS: "2,3"
+        run: bench/run.sh
+      - name: Summary
+        run: cat bench/results/*/report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-results
+          path: bench/results/

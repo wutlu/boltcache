@@ -115,6 +115,7 @@ type Session struct {
 	watched      map[string]uint64 // key -> cache.KeyVersion at WATCH time
 
 	tx       *cache.Tx // set while running inside Atomic
+	batch    bool      // tx is held for a pipeline batch (see ExecPipeline)
 	inScript bool
 	created  time.Time
 }
@@ -244,7 +245,9 @@ func (e *Engine) run(s *Session, sp *spec, args []string, w resp.Writer) {
 		w.Error(msg)
 		return
 	}
-	if s.tx == nil && sp.flags&flagDenyOOM != 0 && e.cache.OOM() {
+	// Inside MULTI/EXEC and scripts OOM was checked before starting; a
+	// pipeline batch checks every command like the unbatched path does.
+	if (s.tx == nil || s.batch) && sp.flags&flagDenyOOM != 0 && e.cache.OOM() {
 		e.rejected.Add(1)
 		w.Error(cache.ErrOOM.Error())
 		return
@@ -269,6 +272,66 @@ func (e *Engine) run(s *Session, sp *spec, args []string, w resp.Writer) {
 		}
 	}
 	sp.fn(e, s, e.cache.Tx, args, w)
+}
+
+// ExecPipeline runs commands received together (a client pipeline).
+// Consecutive single-key commands whose keys live in the same shard run
+// under one lock acquisition instead of one each. Without this, many
+// clients pipelining commands at one hot key (a leaderboard, a counter, a
+// queue) spend most of their time contending for that shard's lock.
+// Results and semantics are identical to calling ExecStrings for each
+// command.
+func (e *Engine) ExecPipeline(s *Session, cmds [][]string, w resp.Writer) {
+	for i := 0; i < len(cmds); {
+		if s.Close {
+			return
+		}
+		key, ok := e.batchable(s, cmds[i])
+		j := i + 1
+		if ok {
+			shard := e.cache.ShardOf(key)
+			for j < len(cmds) {
+				k, ok := e.batchable(s, cmds[j])
+				if !ok || e.cache.ShardOf(k) != shard {
+					break
+				}
+				j++
+			}
+		}
+		if j-i == 1 {
+			e.ExecStrings(s, cmds[i], w)
+			i++
+			continue
+		}
+		group := cmds[i:j]
+		_ = e.cache.Atomic([]string{key}, false, func(tx *cache.Tx) error {
+			s.tx, s.batch = tx, true
+			defer func() { s.tx, s.batch = nil, false }()
+			for _, c := range group {
+				e.ExecStrings(s, c, w)
+			}
+			return nil
+		})
+		i = j
+	}
+}
+
+// batchable reports whether args is a plain single-key command that can
+// share a lock with its neighbours, and returns its key.
+func (e *Engine) batchable(s *Session, args []string) (string, bool) {
+	if len(args) == 0 || !s.Authenticated || s.inMulti || s.Subscriptions() > 0 {
+		return "", false
+	}
+	sp := lookup(args[0])
+	const excluded = flagNoKeys | flagNoTx | flagGlobal | flagScripting | flagMultiControl | flagPubSub
+	if sp == nil || !sp.arityOK(len(args)) || sp.flags&excluded != 0 || sp.getKeys != nil {
+		return "", false
+	}
+	keys := sp.keys(args)
+	if len(keys) != 1 {
+		return "", false
+	}
+	return keys[0], true
 }
 
 // Stats about command processing.

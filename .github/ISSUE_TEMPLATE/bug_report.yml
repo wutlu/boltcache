@@ -1,0 +1,36 @@
+name: Bug report
+description: Something doesn't work as documented, or differs from Redis
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Include the commands you sent and the replies you got (redis-cli output, curl output...).
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+      description: If Redis behaves differently, paste what Redis returns for the same commands.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: BoltCache version
+      description: Output of `boltcache version`, or the Docker image tag
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: OS/arch, how you run it (binary, Docker, go install), client library and version
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: Relevant parts of your config (`boltcache config show` masks tokens)
+      render: yaml

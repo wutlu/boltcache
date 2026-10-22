@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"net/http/pprof"
@@ -451,7 +452,7 @@ func (rs *restServer) setValue(w http.ResponseWriter, r *http.Request) {
 }
 
 // getValue returns the value of any type: strings as strings, lists and
-// sets as arrays, hashes as objects.
+// sets as arrays, hashes as objects and sorted sets as [{member, score}].
 func (rs *restServer) getValue(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	switch t := rs.exec("TYPE", key); t.Str {
@@ -463,9 +464,29 @@ func (rs *restServer) getValue(w http.ResponseWriter, r *http.Request) {
 		rs.reply(w, rs.exec("SMEMBERS", key), "Key not found")
 	case "hash":
 		rs.hashObject(w, key)
+	case "zset":
+		v := rs.exec("ZRANGE", key, "0", "-1", "WITHSCORES")
+		if v.Kind == resp.KindError {
+			rs.reply(w, v, "")
+			return
+		}
+		out := make([]map[string]any, 0, len(v.Array)/2)
+		for i := 0; i+1 < len(v.Array); i += 2 {
+			score, _ := strconv.ParseFloat(v.Array[i+1].Str, 64)
+			out = append(out, map[string]any{"member": v.Array[i].Str, "score": jsonScore(score)})
+		}
+		rs.sendResponse(w, CacheResponse{Success: true, Value: out, Count: int64(len(out))})
 	default:
 		rs.reply(w, rs.exec("GET", key), "Key not found")
 	}
+}
+
+// jsonScore keeps infinite scores representable in JSON.
+func jsonScore(f float64) any {
+	if math.IsInf(f, 0) {
+		return strconv.FormatFloat(f, 'g', -1, 64)
+	}
+	return f
 }
 
 func (rs *restServer) deleteValue(w http.ResponseWriter, r *http.Request) {

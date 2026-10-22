@@ -518,3 +518,113 @@ func TestScriptSandboxIsolation(t *testing.T) {
 	h.expect("3", "EVAL", "return #string.rep('x', 3)", "0")
 	h.expectPrefix("!ERR Error running script", "EVAL", "return getfenv(0)", "0")
 }
+
+func TestSortedSetCommands(t *testing.T) {
+	h := newHarness(t, Config{})
+	h.expect("3", "ZADD", "lb", "10", "ada", "20", "bob", "15", "cy")
+	h.expect("0", "ZADD", "lb", "NX", "99", "ada")
+	h.expect("1", "ZADD", "lb", "CH", "XX", "12", "ada", "1", "nobody")
+	h.expect(`"12"`, "ZSCORE", "lb", "ada")
+	h.expect(`"14.5"`, "ZINCRBY", "lb", "2.5", "ada")
+	h.expect(`["14.5" nil]`, "ZMSCORE", "lb", "ada", "zz")
+	h.expect("nil", "ZADD", "lb", "GT", "INCR", "-100", "ada") // update refused
+	h.expect(`"15.5"`, "ZADD", "lb", "INCR", "1", "ada")
+	h.expect("3", "ZCARD", "lb")
+	h.expect(`["cy" "ada" "bob"]`, "ZRANGE", "lb", "0", "-1")
+	h.expect(`["bob" "20" "ada" "15.5"]`, "ZRANGE", "lb", "0", "1", "REV", "WITHSCORES")
+	h.expect(`["cy" "ada"]`, "ZRANGEBYSCORE", "lb", "15", "(20")
+	h.expect(`["ada"]`, "ZRANGEBYSCORE", "lb", "-inf", "+inf", "LIMIT", "1", "1")
+	h.expect(`["bob" "ada"]`, "ZRANGE", "lb", "+inf", "(15", "BYSCORE", "REV")
+	h.expect(`["bob" "ada"]`, "ZREVRANGEBYSCORE", "lb", "+inf", "(15")
+	h.expect(`["bob" "ada" "cy"]`, "ZREVRANGE", "lb", "0", "-1")
+	h.expect("2", "ZCOUNT", "lb", "(15", "+inf")
+	h.expect("1", "ZRANK", "lb", "ada")
+	h.expect("0", "ZREVRANK", "lb", "bob")
+	h.expect(`[2 "20"]`, "ZRANK", "lb", "bob", "WITHSCORE")
+	h.expect("nil", "ZRANK", "lb", "nobody")
+	h.expect(`["cy" "15"]`, "ZPOPMIN", "lb")
+	h.expect(`["bob" "20"]`, "ZPOPMAX", "lb", "1")
+	h.expect(`["0" ["ada" "15.5"]]`, "ZSCAN", "lb", "0", "MATCH", "a*")
+	h.expect("zset", "TYPE", "lb")
+	h.expect(`["0" ["lb"]]`, "SCAN", "0", "TYPE", "zset", "COUNT", "10000")
+	h.expect("1", "ZREM", "lb", "ada", "nobody")
+	h.expect("0", "EXISTS", "lb")
+
+	h.do("ZADD", "r", "1", "a", "2", "b", "3", "c", "4", "d")
+	h.expect("2", "ZREMRANGEBYRANK", "r", "0", "1")
+	h.expect("1", "ZREMRANGEBYSCORE", "r", "(3", "4")
+	h.expect(`["c"]`, "ZRANGE", "r", "0", "-1")
+
+	h.expect(`"inf"`, "ZINCRBY", "inf", "+inf", "m")
+	h.expect("!ERR resulting score is not a number (NaN)", "ZINCRBY", "inf", "-inf", "m")
+	h.expect("!ERR value is not a valid float", "ZADD", "z", "abc", "m")
+	h.expect("!ERR value is not a valid float", "ZADD", "z", "nan", "m")
+	h.expect("!ERR XX and NX options at the same time are not compatible", "ZADD", "z", "NX", "XX", "1", "m")
+	h.expect("!ERR GT, LT, and/or NX options at the same time are not compatible", "ZADD", "z", "NX", "GT", "1", "m")
+	h.expect("!ERR INCR option supports a single increment-element pair", "ZADD", "z", "INCR", "1", "a", "2", "b")
+	h.expect("!ERR wrong number of arguments for 'zadd' command", "ZADD", "z", "1")
+	h.expect("!ERR syntax error", "ZADD", "z", "1", "m", "2")
+	h.expect("!ERR min or max is not a float", "ZCOUNT", "r", "x", "1")
+	h.expectPrefix("!ERR syntax error, LIMIT", "ZRANGE", "r", "0", "1", "LIMIT", "0", "1")
+	h.do("SET", "str", "x")
+	h.expectPrefix("!WRONGTYPE", "ZADD", "str", "1", "m")
+
+	// A leaderboard via Lua: atomically add points and return the new rank.
+	h.expect("0", "EVAL", `
+		redis.call('ZINCRBY', KEYS[1], ARGV[1], ARGV[2])
+		return redis.call('ZREVRANK', KEYS[1], ARGV[2])`, "1", "board", "50", "player1")
+}
+
+func TestExecPipelineMatchesSequential(t *testing.T) {
+	script := [][]string{
+		{"SET", "k", "1"}, {"INCR", "k"}, {"INCR", "k"}, {"GET", "k"},
+		{"LPUSH", "k", "x"}, // WRONGTYPE inside a batch
+		{"ZADD", "z", "1", "a"}, {"ZADD", "z", "2", "b"}, {"ZINCRBY", "z", "5", "a"}, {"ZRANGE", "z", "0", "-1", "WITHSCORES"},
+		{"MULTI"}, {"INCR", "k"}, {"GET", "k"}, {"EXEC"},
+		{"NOPE"}, {"GET"}, {"MGET", "k", "z"},
+		{"EVAL", "return redis.call('INCR', KEYS[1])", "1", "k"},
+		{"DEL", "k"}, {"GET", "k"},
+		{"QUIT"}, {"SET", "after", "quit"},
+	}
+	run := func(pipeline bool) []string {
+		h := newHarness(t, Config{})
+		var rec resp.Recorder
+		if pipeline {
+			h.e.ExecPipeline(h.s, script, &rec)
+		} else {
+			for _, c := range script {
+				if h.s.Close {
+					break
+				}
+				h.e.ExecStrings(h.s, c, &rec)
+			}
+		}
+		var out []string
+		for _, v := range rec.Results() {
+			out = append(out, render(v))
+		}
+		if v, _, _ := h.e.Cache().Get("after"); v != "" {
+			t.Errorf("command after QUIT ran (pipeline=%v)", pipeline)
+		}
+		return out
+	}
+	seq, pipe := run(false), run(true)
+	if !reflect.DeepEqual(seq, pipe) {
+		t.Fatalf("pipeline differs:\nseq  %v\npipe %v", seq, pipe)
+	}
+
+	// OOM is still enforced inside a batch.
+	c := cache.New(cache.Options{MaxKeys: 1, EvictionPolicy: cache.PolicyNoEviction})
+	t.Cleanup(c.Close)
+	e := New(c, nil, Config{})
+	var rec resp.Recorder
+	e.ExecPipeline(e.NewSession("t", nil), [][]string{{"SET", "a", "1"}, {"SET", "a", "2"}, {"SET", "a", "3"}}, &rec)
+	_ = c.Set("b", "1", 0) // now over the key limit
+	rec.Reset()
+	e.ExecPipeline(e.NewSession("t", nil), [][]string{{"SET", "a", "x"}, {"SET", "a", "y"}}, &rec)
+	for _, v := range rec.Results() {
+		if v.Kind != resp.KindError || !strings.HasPrefix(v.Str, "OOM") {
+			t.Fatalf("batched write over the limit: %s", render(v))
+		}
+	}
+}

@@ -1,0 +1,16 @@
+name: Feature request
+description: Suggest a command, endpoint or capability
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the use case rather than only the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: For Redis commands, link the Redis documentation of the command.

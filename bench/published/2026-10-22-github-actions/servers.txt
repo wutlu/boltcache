@@ -1,0 +1,5 @@
+BoltCache|boltcache:bench
+Redis|redis:8.10.2
+Redis (io-threads 2)|redis:8.10.2
+Valkey (io-threads 2)|valkey/valkey:9.2
+Dragonfly|docker.dragonflydb.io/dragonflydb/dragonfly:v2.0.2
