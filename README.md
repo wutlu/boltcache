@@ -205,13 +205,17 @@ redis-cli -p 6382 -a "$TOKEN" GET key                             # AUTH <token>
 
 See [BENCHMARKS.md](BENCHMARKS.md) for the full results, method and caveats. Every number comes from [`bench/run.sh`](bench/run.sh), which runs `redis-benchmark` against BoltCache, Redis, Valkey and Dragonfly with the same pinned CPU budget, and runs in CI.
 
-Summary of the latest run (GitHub Actions, 2 server cores):
+With 4 server cores (memtier, 50% SET / 50% GET, random keys):
 
-- **Without pipelining**: BoltCache is in the top group with Dragonfly, at about half of Redis' median latency.
-- **With pipeline 16**: BoltCache leads `LPUSH`/`HSET` and is 10–18% behind single-threaded Redis on `SET`/`GET`/`INCR`.
-- **`ZADD` with pipelining** reaches only about 40% of Redis' throughput. This is a known weakness.
+| | ops/s, pipeline 16 | ops/s, no pipelining | p50, no pipelining |
+|---|---:|---:|---:|
+| **BoltCache 2.2** | **3.23M** | **441K** | **0.079 ms** |
+| Redis 8.10 | 1.45M | 181K | 0.279 ms |
+| Redis 8.10, io-threads 4 | 2.17M | 229K | 0.207 ms |
+| Valkey 9.2, io-threads 4 | 1.92M | 331K | 0.127 ms |
+| Dragonfly 2.0 | 1.81M | 305K | 0.135 ms |
 
-BoltCache 2.x is about twice as fast as 1.0. Measured on an M1 Pro with `boltcache client benchmark`, 50 clients: `SET` 78K → 147K ops/s and `GET` with pipeline 16 1.13M → 2.32M ops/s.
+BoltCache executes commands on every core. Redis' I/O threads only offload socket I/O, so Redis can't use more than about two cores' worth of work. Per core, single-threaded Redis is still the most CPU-efficient. Pipelined writes to a single hot key (`redis-benchmark`'s `ZADD` test) are BoltCache's weak spot, because they are serialized on one lock. This run used a laptop VM; the GitHub Actions results in [BENCHMARKS.md](BENCHMARKS.md) are smaller-scale but independently reproducible.
 
 Measure on your own hardware:
 

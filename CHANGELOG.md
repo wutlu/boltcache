@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [2.2.0] - 2026-10-28
+
+A performance release. With 4 server cores, BoltCache now serves 3.2M ops/s on a 50/50 SET/GET mix with pipelining: 2.2× Redis 8.10, 1.5× Redis with I/O threads, and 1.7–1.8× Valkey and Dragonfly. Without pipelining it serves 441K ops/s at 0.08 ms median latency, 2.4× Redis. On one core it now matches or beats Redis on most commands. See [BENCHMARKS.md](BENCHMARKS.md).
+
+### Performance
+
+- **Sorted sets use a counted B+tree** instead of a skiplist. Random `ZADD` into a 100K-member set takes 0.74 µs instead of 2.4 µs, and single-core pipelined `ZADD` beats Redis (591K vs 532K ops/s).
+- **Less work per command**:
+  - `SET` overwrites strings in place.
+  - The clock is read only for keys with a TTL.
+  - Commands are looked up once, with upper-case names in their own table.
+  - Multi-key detection and pipeline batching no longer allocate.
+  - Arguments are converted with one allocation per command.
+  - RESP lengths are parsed by hand.
+  - Command counters are striped across cores.
+  - On one core, user CPU per command dropped by more than half.
+- **Event loops follow `GOMAXPROCS`**, which respects container CPU limits, instead of the host's CPU count.
+
+### Added
+
+- `bench/run.sh` adds a `memtier_benchmark` scenario. It reports how many CPU cores each server actually used and its throughput per core-second, which shows when a server is limited by a single thread.
+
 ## [2.1.0] - 2026-10-22
 
 ### Added
@@ -85,6 +107,7 @@ BoltCache 2.0 is a ground-up rework of the engine, the network layer and the too
 
 Initial release.
 
+[2.2.0]: https://github.com/wutlu/boltcache/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/wutlu/boltcache/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/wutlu/boltcache/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/wutlu/boltcache/compare/e6a00dc...v2.0.0

@@ -115,10 +115,13 @@ type Session struct {
 	queue        [][]string
 	watched      map[string]uint64 // key -> cache.KeyVersion at WATCH time
 
-	tx       *cache.Tx // set while running inside Atomic
-	batch    bool      // tx is held for a pipeline batch (see ExecPipeline)
-	inScript bool
-	created  time.Time
+	tx    *cache.Tx // set while running inside Atomic
+	batch bool      // tx is held for a pipeline batch (see ExecPipeline)
+	// Scratch space reused by ExecPipeline.
+	pipeSpecs  []*spec
+	pipeShards []int
+	inScript   bool
+	created    time.Time
 }
 
 // NewSession creates a session; it's pre-authenticated when no password is
@@ -291,8 +294,11 @@ func (e *Engine) run(s *Session, sp *spec, args []string, w resp.Writer) {
 func (e *Engine) ExecPipeline(s *Session, cmds [][]string, w resp.Writer) {
 	// Look every command up once; shard is -1 for commands that can't be
 	// batched.
-	specs := make([]*spec, len(cmds))
-	shards := make([]int, len(cmds))
+	if cap(s.pipeSpecs) < len(cmds) {
+		s.pipeSpecs = make([]*spec, len(cmds))
+		s.pipeShards = make([]int, len(cmds))
+	}
+	specs, shards := s.pipeSpecs[:len(cmds)], s.pipeShards[:len(cmds)]
 	for i, c := range cmds {
 		if len(c) == 0 {
 			shards[i] = -1

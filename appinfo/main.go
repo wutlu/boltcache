@@ -14,7 +14,7 @@ var (
 
 	// Version, Commit and Date are set at build time with
 	//   -ldflags "-X github.com/wutlu/boltcache/v2/appinfo.Version=2.0.0 ..."
-	Version = "2.1.0"
+	Version = "2.2.0"
 	Commit  = ""
 	Date    = ""
 
