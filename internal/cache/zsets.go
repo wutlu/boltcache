@@ -6,10 +6,10 @@ import (
 )
 
 // zset is a sorted set: a member->score map for O(1) lookups plus a
-// skiplist ordered by (score, member) for ranges and ranks.
+// counted B+tree ordered by (score, member) for ranges and ranks.
 type zset struct {
 	dict map[string]float64
-	zsl  *skiplist
+	tree *ztree
 }
 
 // ZMember is a sorted set element.
@@ -19,7 +19,7 @@ type ZMember struct {
 }
 
 func newZSet(key string) *entry {
-	return &entry{kind: KindZSet, zset: &zset{dict: map[string]float64{}, zsl: newSkiplist()},
+	return &entry{kind: KindZSet, zset: &zset{dict: map[string]float64{}, tree: newZTree()},
 		size: entryOverhead + int64(len(key))}
 }
 
@@ -50,12 +50,12 @@ func (e *entry) zsetPut(member string, score float64) {
 		if old == score {
 			return
 		}
-		z.zsl.delete(old, member)
+		z.tree.delete(zitem{old, member})
 	} else {
 		e.size += zsetMemberSize(member)
 	}
 	z.dict[member] = score
-	z.zsl.insert(score, member)
+	z.tree.insert(zitem{score, member})
 }
 
 func (e *entry) zsetDel(member string) bool {
@@ -65,7 +65,7 @@ func (e *entry) zsetDel(member string) bool {
 		return false
 	}
 	delete(z.dict, member)
-	z.zsl.delete(score, member)
+	z.tree.delete(zitem{score, member})
 	e.size -= zsetMemberSize(member)
 	return true
 }
@@ -167,9 +167,9 @@ func (t *Tx) ZRank(key, member string, rev bool) (rank int, score float64, ok bo
 		if !found {
 			return
 		}
-		r := z.zsl.rank(s, member)
+		r := z.tree.rank(zitem{s, member})
 		if rev {
-			r = z.zsl.length - 1 - r
+			r = z.tree.length - 1 - r
 		}
 		rank, score, ok = r, s, true
 	})
@@ -202,23 +202,19 @@ func (t *Tx) ZRem(key string, members ...string) (int, error) {
 // rankRange collects members between ranks start and stop (inclusive,
 // negative counts from the end), in reverse order when rev.
 func (z *zset) rankRange(start, stop int, rev bool) []ZMember {
-	s, e, ok := clampRange(start, stop, z.zsl.length)
+	s, e, ok := clampRange(start, stop, z.tree.length)
 	if !ok {
 		return []ZMember{}
 	}
 	out := make([]ZMember, 0, e-s+1)
+	p, step := z.tree.at(s), 1
 	if rev {
-		x := z.zsl.byRank(z.zsl.length - 1 - s)
-		for i := s; i <= e && x != nil; i++ {
-			out = append(out, ZMember{x.member, x.score})
-			x = x.backward
-		}
-		return out
+		p, step = z.tree.at(z.tree.length-1-s), -1
 	}
-	x := z.zsl.byRank(s)
-	for i := s; i <= e && x != nil; i++ {
-		out = append(out, ZMember{x.member, x.score})
-		x = x.level[0].forward
+	for i := s; i <= e && p.valid(); i++ {
+		it := p.item()
+		out = append(out, ZMember{it.member, it.score})
+		p = p.step(step)
 	}
 	return out
 }
@@ -227,30 +223,21 @@ func (z *zset) rankRange(start, stop int, rev bool) []ZMember {
 // returning at most count (count < 0 = all), descending when rev.
 func (z *zset) scoreRange(min, max ScoreBound, rev bool, offset, count int) []ZMember {
 	out := []ZMember{}
-	var x *zNode
+	p, step := z.tree.firstInRange(min, max), 1
 	if rev {
-		x = z.zsl.lastInRange(min, max)
-	} else {
-		x = z.zsl.firstInRange(min, max)
+		p, step = z.tree.lastInRange(min, max), -1
 	}
-	for ; x != nil && offset > 0; offset-- {
-		if rev {
-			x = x.backward
-		} else {
-			x = x.level[0].forward
-		}
+	for ; p.valid() && offset > 0; offset-- {
+		p = p.step(step)
 	}
-	for x != nil && count != 0 {
-		if rev && !min.aboveMin(x.score) || !rev && !max.belowMax(x.score) {
+	for p.valid() && count != 0 {
+		it := p.item()
+		if rev && !min.aboveMin(it.score) || !rev && !max.belowMax(it.score) {
 			break
 		}
-		out = append(out, ZMember{x.member, x.score})
+		out = append(out, ZMember{it.member, it.score})
 		count--
-		if rev {
-			x = x.backward
-		} else {
-			x = x.level[0].forward
-		}
+		p = p.step(step)
 	}
 	return out
 }
@@ -273,12 +260,12 @@ func (t *Tx) ZRangeByScore(key string, min, max ScoreBound, rev bool, offset, co
 func (t *Tx) ZCount(key string, min, max ScoreBound) (int, error) {
 	n := 0
 	err := t.viewZSet(key, func(z *zset) {
-		first := z.zsl.firstInRange(min, max)
-		if first == nil {
+		first := z.tree.firstInRange(min, max)
+		if !first.valid() {
 			return
 		}
-		last := z.zsl.lastInRange(min, max)
-		n = z.zsl.rank(last.score, last.member) - z.zsl.rank(first.score, first.member) + 1
+		last := z.tree.lastInRange(min, max)
+		n = z.tree.rank(last.item()) - z.tree.rank(first.item()) + 1
 	})
 	return n, err
 }
@@ -294,13 +281,14 @@ func (t *Tx) ZPop(key string, count int, max bool) ([]ZMember, error) {
 		if e.kind != KindZSet {
 			return nil, ErrWrongType
 		}
-		for i := 0; i < count && e.zset.zsl.length > 0; i++ {
-			x := e.zset.zsl.header.level[0].forward
+		for i := 0; i < count && e.zset.tree.length > 0; i++ {
+			r := 0
 			if max {
-				x = e.zset.zsl.tail
+				r = e.zset.tree.length - 1
 			}
-			out = append(out, ZMember{x.member, x.score})
-			e.zsetDel(x.member)
+			it := e.zset.tree.at(r).item()
+			out = append(out, ZMember{it.member, it.score})
+			e.zsetDel(it.member)
 		}
 		if len(e.zset.dict) == 0 {
 			return nil, nil
