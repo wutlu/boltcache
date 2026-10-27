@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	"sync/atomic"
@@ -61,6 +62,7 @@ type protoConn struct {
 	parser  resp.Parser
 	in      []byte     // unconsumed input (a partially received command)
 	batch   [][]string // commands parsed in the current read
+	arena   []string   // backing storage for the argument slices in batch
 
 	textPush atomic.Bool  // deliver pub/sub messages in the legacy format
 	pending  atomic.Int64 // queued async push bytes
@@ -86,7 +88,10 @@ func newProtoServer(name, addr string, legacyText bool, maxConns int, e *command
 func (ps *protoServer) start() error {
 	go func() {
 		ps.stopped <- gnet.Run(ps, "tcp://"+ps.addr,
-			gnet.WithMulticore(true),
+			// One event loop per usable CPU. GOMAXPROCS follows container
+			// CPU limits (Go 1.25+), unlike runtime.NumCPU which gnet's
+			// WithMulticore uses.
+			gnet.WithNumEventLoop(runtime.GOMAXPROCS(0)),
 			gnet.WithTCPNoDelay(gnet.TCPNoDelay),
 			gnet.WithTCPKeepAlive(5*time.Minute),
 			gnet.WithReuseAddr(true),
@@ -169,6 +174,7 @@ func (ps *protoServer) OnTraffic(gc gnet.Conn) (action gnet.Action) {
 	// RESP commands are collected and run as one pipeline so the engine can
 	// batch commands that hit the same shard (see Engine.ExecPipeline).
 	batch := pc.batch[:0]
+	pc.arena = pc.arena[:0]
 	flush := func() {
 		if len(batch) > 0 {
 			ps.engine.ExecPipeline(pc.session, batch, &pc.enc)
@@ -205,11 +211,7 @@ func (ps *protoServer) OnTraffic(gc gnet.Conn) (action gnet.Action) {
 			pc.execText(args)
 			continue
 		}
-		cmd := make([]string, len(args))
-		for i, a := range args {
-			cmd[i] = string(a)
-		}
-		batch = append(batch, cmd)
+		batch = append(batch, pc.toStrings(args))
 		// AUTH/HELLO change what the parser accepts for the next command.
 		if !pc.session.Authenticated || len(batch) >= 1024 {
 			flush()
@@ -250,6 +252,30 @@ func (ps *protoServer) OnTraffic(gc gnet.Conn) (action gnet.Action) {
 		pc.enc.Buf = nil
 	}
 	return gnet.None
+}
+
+// toStrings converts a parsed command to strings with a single allocation:
+// all arguments are copied into one string and sliced from it. The []string
+// itself comes from pc.arena, which is reused on the next read, so the
+// engine must not keep argument slices (MULTI copies queued commands).
+func (pc *protoConn) toStrings(args [][]byte) []string {
+	total := 0
+	for _, a := range args {
+		total += len(a)
+	}
+	var b strings.Builder
+	b.Grow(total)
+	for _, a := range args {
+		b.Write(a)
+	}
+	joined := b.String()
+	start := len(pc.arena)
+	off := 0
+	for _, a := range args {
+		pc.arena = append(pc.arena, joined[off:off+len(a)])
+		off += len(a)
+	}
+	return pc.arena[start:len(pc.arena):len(pc.arena)]
 }
 
 // Deliver implements pubsub.Subscriber. It's called from publishers'

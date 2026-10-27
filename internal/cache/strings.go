@@ -84,6 +84,14 @@ func (t *Tx) SetWithOptions(key, val string, opts SetOptions, wantOld bool) (Set
 			return e, nil
 		}
 		res.Written = true
+		if e != nil && e.kind == KindString {
+			// Overwrite in place: avoids an allocation and a map write.
+			e.setString(val)
+			if !opts.KeepTTL {
+				e.expireAt = exp
+			}
+			return e, nil
+		}
 		ne := newString(key, val)
 		if opts.KeepTTL && e != nil {
 			ne.expireAt = e.expireAt

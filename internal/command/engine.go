@@ -6,6 +6,7 @@ package command
 import (
 	"crypto/subtle"
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -50,8 +51,8 @@ type Engine struct {
 	ClientCount func() int64
 
 	nextID   atomic.Int64
-	commands atomic.Uint64
-	rejected atomic.Uint64
+	commands stripedCounter
+	rejected stripedCounter
 }
 
 // New creates an engine.
@@ -169,9 +170,14 @@ func (e *Engine) ExecStrings(s *Session, args []string, w resp.Writer) {
 	if len(args) == 0 {
 		return
 	}
-	sp := lookup(args[0])
+	e.execSpec(s, lookup(args[0]), args, w)
+}
+
+// execSpec is ExecStrings with the command already looked up (sp may be
+// nil for unknown commands).
+func (e *Engine) execSpec(s *Session, sp *spec, args []string, w resp.Writer) {
 	if sp == nil {
-		e.rejected.Add(1)
+		e.rejected.add(s.ID)
 		if s.inMulti {
 			s.multiAborted = true
 		}
@@ -179,7 +185,7 @@ func (e *Engine) ExecStrings(s *Session, args []string, w resp.Writer) {
 		return
 	}
 	if !sp.arityOK(len(args)) {
-		e.rejected.Add(1)
+		e.rejected.add(s.ID)
 		if s.inMulti {
 			s.multiAborted = true
 		}
@@ -187,12 +193,12 @@ func (e *Engine) ExecStrings(s *Session, args []string, w resp.Writer) {
 		return
 	}
 	if !s.Authenticated && sp.flags&flagNoAuth == 0 {
-		e.rejected.Add(1)
+		e.rejected.add(s.ID)
 		w.Error("NOAUTH Authentication required.")
 		return
 	}
 	if s.Subscriptions() > 0 && sp.flags&flagPubSub == 0 {
-		e.rejected.Add(1)
+		e.rejected.add(s.ID)
 		w.Error(fmt.Sprintf("ERR Can't execute '%s': only (P)SUBSCRIBE / (P)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context", sp.name))
 		return
 	}
@@ -202,7 +208,8 @@ func (e *Engine) ExecStrings(s *Session, args []string, w resp.Writer) {
 			w.Error(err)
 			return
 		}
-		s.queue = append(s.queue, args)
+		// Clone: transports may reuse the argument slice after Exec returns.
+		s.queue = append(s.queue, slices.Clone(args))
 		w.Simple("QUEUED")
 		return
 	}
@@ -248,18 +255,18 @@ func (e *Engine) run(s *Session, sp *spec, args []string, w resp.Writer) {
 	// Inside MULTI/EXEC and scripts OOM was checked before starting; a
 	// pipeline batch checks every command like the unbatched path does.
 	if (s.tx == nil || s.batch) && sp.flags&flagDenyOOM != 0 && e.cache.OOM() {
-		e.rejected.Add(1)
+		e.rejected.add(s.ID)
 		w.Error(cache.ErrOOM.Error())
 		return
 	}
-	e.commands.Add(1)
+	e.commands.add(s.ID)
 	if s.tx != nil {
 		sp.fn(e, s, s.tx, args, w)
 		return
 	}
 	if sp.flags&flagNoKeys == 0 {
-		if keys := sp.keys(args); len(keys) > 1 {
-			err := e.cache.Atomic(keys, false, func(tx *cache.Tx) error {
+		if sp.multiKey(args) {
+			err := e.cache.Atomic(sp.keys(args), false, func(tx *cache.Tx) error {
 				s.tx = tx
 				defer func() { s.tx = nil }()
 				sp.fn(e, s, tx, args, w)
@@ -282,33 +289,44 @@ func (e *Engine) run(s *Session, sp *spec, args []string, w resp.Writer) {
 // Results and semantics are identical to calling ExecStrings for each
 // command.
 func (e *Engine) ExecPipeline(s *Session, cmds [][]string, w resp.Writer) {
+	// Look every command up once; shard is -1 for commands that can't be
+	// batched.
+	specs := make([]*spec, len(cmds))
+	shards := make([]int, len(cmds))
+	for i, c := range cmds {
+		if len(c) == 0 {
+			shards[i] = -1
+			continue
+		}
+		specs[i] = lookup(c[0])
+		shards[i] = -1
+		if key, ok := e.batchable(s, specs[i], c); ok {
+			shards[i] = e.cache.ShardOf(key)
+		}
+	}
 	for i := 0; i < len(cmds); {
 		if s.Close {
 			return
 		}
-		key, ok := e.batchable(s, cmds[i])
 		j := i + 1
-		if ok {
-			shard := e.cache.ShardOf(key)
-			for j < len(cmds) {
-				k, ok := e.batchable(s, cmds[j])
-				if !ok || e.cache.ShardOf(k) != shard {
-					break
-				}
+		if shards[i] >= 0 {
+			for j < len(cmds) && shards[j] == shards[i] {
 				j++
 			}
 		}
 		if j-i == 1 {
-			e.ExecStrings(s, cmds[i], w)
+			if len(cmds[i]) > 0 {
+				e.execSpec(s, specs[i], cmds[i], w)
+			}
 			i++
 			continue
 		}
-		group := cmds[i:j]
+		key, _ := specs[i].singleKey(cmds[i])
 		_ = e.cache.Atomic([]string{key}, false, func(tx *cache.Tx) error {
 			s.tx, s.batch = tx, true
 			defer func() { s.tx, s.batch = nil, false }()
-			for _, c := range group {
-				e.ExecStrings(s, c, w)
+			for k := i; k < j; k++ {
+				e.execSpec(s, specs[k], cmds[k], w)
 			}
 			return nil
 		})
@@ -317,26 +335,23 @@ func (e *Engine) ExecPipeline(s *Session, cmds [][]string, w resp.Writer) {
 }
 
 // batchable reports whether args is a plain single-key command that can
-// share a lock with its neighbours, and returns its key.
-func (e *Engine) batchable(s *Session, args []string) (string, bool) {
-	if len(args) == 0 || !s.Authenticated || s.inMulti || s.Subscriptions() > 0 {
+// share a lock with its neighbours, and returns its key. Session state
+// (auth, MULTI, subscriptions) is checked before every command runs, so a
+// command that changes it simply ends the batch.
+func (e *Engine) batchable(s *Session, sp *spec, args []string) (string, bool) {
+	if sp == nil || !s.Authenticated || s.inMulti || s.Subscriptions() > 0 {
 		return "", false
 	}
-	sp := lookup(args[0])
 	const excluded = flagNoKeys | flagNoTx | flagGlobal | flagScripting | flagMultiControl | flagPubSub
-	if sp == nil || !sp.arityOK(len(args)) || sp.flags&excluded != 0 || sp.getKeys != nil {
+	if sp.flags&excluded != 0 || !sp.arityOK(len(args)) {
 		return "", false
 	}
-	keys := sp.keys(args)
-	if len(keys) != 1 {
-		return "", false
-	}
-	return keys[0], true
+	return sp.singleKey(args)
 }
 
 // Stats about command processing.
 func (e *Engine) Stats() (commands, rejected uint64) {
-	return e.commands.Load(), e.rejected.Load()
+	return e.commands.load(), e.rejected.load()
 }
 
 // writeErr writes err using Redis error conventions.
