@@ -81,9 +81,18 @@ func TestRWLockWriterNotStarved(t *testing.T) {
 	}
 	time.Sleep(5 * time.Millisecond)
 	done := make(chan struct{})
-	go func() { l.Lock(); l.Unlock(); close(done) }()
+	acquired := false
+	go func() {
+		l.Lock()
+		acquired = true
+		l.Unlock()
+		close(done)
+	}()
 	select {
 	case <-done:
+		if !acquired {
+			t.Fatal("writer did not run")
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("writer starved by readers")
 	}
