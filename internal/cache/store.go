@@ -128,11 +128,6 @@ func (e *entry) expired(now int64) bool {
 	return e.expireAt != 0 && now >= e.expireAt
 }
 
-// expiredNow is expired(now()) that only reads the clock for keys with a
-// TTL: most keys have none, and time.Now showed up in profiles.
-func (e *entry) expiredNow() bool {
-	return e.expireAt != 0 && now() >= e.expireAt
-}
 
 // shard counters are per shard so hot paths never contend on a global
 // cache line. keys/mem/writes change only under the write lock, so they're
