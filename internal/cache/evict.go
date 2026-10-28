@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -117,18 +118,20 @@ func (c *BoltCache) evictOne() bool {
 		}
 		visited++
 		s.mu.RLock()
-		taken := 0
-		// Go map iteration starts at a random position, which gives us
-		// cheap random sampling within the shard.
-		for k, e := range s.m {
-			score := evictionScore(policy, e)
-			if bestShard == -1 || score < bestScore {
-				bestKey, bestShard, bestScore = k, i, score
-			}
-			sampled++
-			taken++
-			if taken >= evictionKeysPerShard {
-				break
+		// Sample the keys following a random slot of the shard's table.
+		if n := len(s.t.slots); n > 0 {
+			taken := 0
+			for j, k := rand.IntN(n), 0; k < n && taken < evictionKeysPerShard; j, k = (j+1)%n, k+1 {
+				if s.t.slots[j] <= slotTomb {
+					continue
+				}
+				key, meta, exp := s.evictionInfo(j)
+				score := evictionScore(policy, meta, exp)
+				if bestShard == -1 || score < bestScore {
+					bestKey, bestShard, bestScore = key, i, score
+				}
+				sampled++
+				taken++
 			}
 		}
 		s.mu.RUnlock()
@@ -138,42 +141,63 @@ func (c *BoltCache) evictOne() bool {
 	}
 	s := &c.shards[bestShard]
 	s.mu.Lock()
-	if e, ok := s.m[bestKey]; ok {
-		c.removeLocked(s, bestKey, e)
+	if i := s.t.find(bestKey, c.hash(bestKey)); i >= 0 {
+		c.removeSlot(s, i, bestKey)
 		c.evicted.Add(1)
 	}
 	s.mu.Unlock()
 	return true
 }
 
+// evictionInfo returns what eviction needs to know about the key in slot i.
+func (s *shard) evictionInfo(i int) (key string, meta uint64, expireAt int64) {
+	r := s.t.decode(s.t.slots[i])
+	if r.kind != KindString {
+		e := s.t.coll(r)
+		return r.key, e.meta.Load(), e.expireAt
+	}
+	if r.meta != nil {
+		meta = r.meta.Load()
+	}
+	return r.key, meta, r.expireAt
+}
+
 // evictionScore returns a value where lower means "evict first".
-func evictionScore(p Policy, e *entry) int64 {
+func evictionScore(p Policy, meta uint64, expireAt int64) int64 {
 	switch p {
 	case PolicyLFU:
-		return int64(e.freq())<<40 | e.accessed()&(1<<40-1)
+		return int64(metaFreq(meta))<<40 | metaAccessed(meta)&(1<<40-1)
 	case PolicyTTL:
-		if e.expireAt != 0 {
+		if expireAt != 0 {
 			// Keys with a TTL always rank before persistent keys.
-			return e.expireAt - (1 << 62)
+			return expireAt - (1 << 62)
 		}
-		return e.accessed()
+		return metaAccessed(meta)
 	case PolicyRandom:
 		return 0
 	default:
-		return e.accessed()
+		return metaAccessed(meta)
 	}
 }
 
-// lfuIncr increments the logarithmic frequency counter: the higher the
-// counter, the less likely an access bumps it (same idea as Redis' LFU).
-func lfuIncr(e *entry) {
-	m := e.meta.Load()
+// lfuIncr increments the logarithmic frequency counter in meta: the higher
+// the counter, the less likely an access bumps it (same idea as Redis'
+// LFU).
+func lfuIncr(meta *atomic.Uint64) {
+	m := meta.Load()
 	f := m >> 56
 	if f >= 255 {
 		return
 	}
 	if f < 5 || rand.Float64() < 1/float64((f-4)*10+1) {
-		e.meta.CompareAndSwap(m, m+1<<56)
+		meta.CompareAndSwap(m, m+1<<56)
+	}
+}
+
+// decayLFU halves the counter in meta.
+func decayLFU(meta *atomic.Uint64) {
+	if m := meta.Load(); m>>56 > 0 {
+		meta.Store(m>>56/2<<56 | m&clockMask)
 	}
 }
 
@@ -200,18 +224,23 @@ func (c *BoltCache) DeleteExpired() int {
 	for i := range c.shards {
 		s := &c.shards[i]
 		s.mu.Lock()
-		for k, e := range s.m {
-			if e.expired(ts) {
-				c.removeLocked(s, k, e)
+		s.t.each(func(j int) bool {
+			key, _, exp := s.info(j)
+			if exp != 0 && ts >= exp {
+				c.removeSlot(s, j, key)
 				removed++
-				continue
+				return true
 			}
 			if decay {
-				if m := e.meta.Load(); m>>56 > 0 {
-					e.meta.Store(m>>56/2<<56 | m&clockMask)
+				r := s.t.decode(s.t.slots[j])
+				var e *entry
+				if r.kind != KindString {
+					e = s.t.coll(r)
 				}
+				decayLFU(metaOf(&r, e))
 			}
-		}
+			return true
+		})
 		s.mu.Unlock()
 	}
 	if removed > 0 {

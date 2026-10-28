@@ -293,7 +293,9 @@ func splitInline(dst [][]byte, line []byte) ([][]byte, error) {
 func isSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\r' || c == '\n' }
 
 // Writer receives a command reply. Arrays are written as Array(n) followed
-// by exactly n elements (which may themselves be arrays).
+// by exactly n elements (which may themselves be arrays). Strings passed to
+// Bulk may only be valid during the call: implementations that keep them
+// must copy them.
 type Writer interface {
 	Simple(s string)
 	Error(msg string)

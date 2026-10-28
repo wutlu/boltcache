@@ -27,7 +27,21 @@ const (
 	flagAdmin                         // administrative
 	flagFast                          // O(1)/O(log n)
 	flagDenyOOM                       // refused when the noeviction memory limit is reached
+	flagNoRetain                      // never keeps references to its arguments (see ArgsAreTransient)
 )
+
+// noRetain lists commands that don't keep their argument strings after
+// returning: they only read them, or copy them into the cache's arena.
+// Transports may pass such commands arguments that alias a reusable
+// buffer instead of allocating (see ArgsAreTransient).
+var noRetain = []string{
+	"get", "set", "setnx", "setex", "psetex", "getset", "getdel", "getex",
+	"mget", "mset", "msetnx", "incr", "decr", "incrby", "decrby", "incrbyfloat",
+	"append", "strlen", "getrange", "substr", "setrange",
+	"del", "unlink", "exists", "type", "ttl", "pttl", "expire", "pexpire",
+	"expireat", "pexpireat", "persist", "expiretime", "pexpiretime",
+	"ping", "echo", "dbsize",
+}
 
 // Write commands that can't grow memory stay allowed when the noeviction
 // limit is reached, so clients can free space.
@@ -171,6 +185,14 @@ func Names() []string {
 	return out
 }
 
+// ArgsAreTransient reports whether the named command may be given argument
+// strings that are only valid until it returns. Commands queued by MULTI
+// are copied, so this holds inside transactions too.
+func ArgsAreTransient(name string) bool {
+	sp := lookup(name)
+	return sp != nil && sp.flags&flagNoRetain != 0
+}
+
 // IsWrite reports whether the named command modifies data.
 func IsWrite(name string) bool {
 	sp := lookup(name)
@@ -200,6 +222,13 @@ func (sp *spec) flagNames() []string {
 func upper(s string) string { return strings.ToUpper(s) }
 
 func init() {
+	defer func() {
+		for _, n := range noRetain {
+			if sp := table[n]; sp != nil {
+				sp.flags |= flagNoRetain
+			}
+		}
+	}()
 	registerKeyCommands()
 	registerStringCommands()
 	registerListCommands()

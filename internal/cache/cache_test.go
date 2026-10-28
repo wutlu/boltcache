@@ -712,24 +712,20 @@ func TestEntrySize(t *testing.T) {
 	}
 }
 
-// Overwriting a string set from adjacent key/value arguments (how the RESP
-// server passes them) must not keep the old value's allocation alive via
-// the map key.
+// Overwritten values must not accumulate: the table compacts dead records.
 func TestOverwriteReleasesOldValue(t *testing.T) {
 	c := newTestCache(t, Options{})
-	set := func(v string) {
-		joined := "k" + v // key and value in one allocation
-		if err := c.Set(joined[:1], joined[1:], 0); err != nil {
+	for i := 0; i < 10000; i++ {
+		if err := c.Set("k", strings.Repeat(strconv.Itoa(i%10), 64), 0); err != nil {
 			t.Fatal(err)
 		}
 	}
-	set(strings.Repeat("a", 64))
-	set(strings.Repeat("b", 64))
 	s := &c.shards[c.shardIndex("k")]
-	for k, e := range s.m {
-		if !adjacent(k, e.str) {
-			t.Fatal("map key still references the first value's allocation")
-		}
+	if n := s.t.live + s.t.dead; n > 2*minChunk {
+		t.Fatalf("one key holds %d bytes of records", n)
+	}
+	if v, _, _ := c.Get("k"); v != strings.Repeat("9", 64) {
+		t.Fatalf("value %q", v)
 	}
 }
 

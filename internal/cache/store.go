@@ -14,6 +14,7 @@ import (
 	"hash/maphash"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -66,7 +67,8 @@ var (
 
 // Approximate per-item memory overheads used for max_memory accounting.
 const (
-	entryOverhead   = 96
+	entryOverhead   = 96 // a collection key: index slot, record, entry, payload
+	stringOverhead  = 24 // a string key: index slot, record header, arena slack
 	elementOverhead = 16
 	setOverhead     = 24
 	hashOverhead    = 32
@@ -100,23 +102,26 @@ func (e *entry) memSize(key string) int64 {
 	if e.col != nil {
 		return e.col.size
 	}
-	return entryOverhead + int64(len(key)+len(e.str))
+	return stringSize(key, e.str)
 }
+
+// stringSize is the accounted size of a string key holding val.
+func stringSize(key, val string) int64 { return stringOverhead + int64(len(key)+len(val)) }
 
 const (
 	lruShift  = 20 // LRU clock unit: 2^20ns ~ 1ms
 	clockMask = 1<<56 - 1
 )
 
-func (e *entry) accessed() int64 { return int64(e.meta.Load() & clockMask) }
-func (e *entry) freq() uint64    { return e.meta.Load() >> 56 }
+func metaAccessed(m uint64) int64 { return int64(m & clockMask) }
+func metaFreq(m uint64) uint64    { return m >> 56 }
 
-// setAccess records an access at unix nanoseconds ts, keeping the counter.
-// Concurrent readers may race; losing an update only makes the policy a
-// little less precise (Redis' LRU clock is approximate too).
-func (e *entry) setAccess(ts int64) {
-	m := e.meta.Load()
-	e.meta.Store(m&^clockMask | uint64(ts>>lruShift)&clockMask)
+// setAccess records an access at unix nanoseconds ts in meta, keeping the
+// counter. Concurrent readers may race; losing an update only makes the
+// policy a little less precise (Redis' LRU clock is approximate too).
+func setAccess(meta *atomic.Uint64, ts int64) {
+	m := meta.Load()
+	meta.Store(m&^clockMask | uint64(ts>>lruShift)&clockMask)
 }
 
 func (e *entry) expired(now int64) bool {
@@ -136,7 +141,7 @@ func (e *entry) expiredNow() bool {
 // hits/misses are bumped by concurrent readers.
 type shard struct {
 	mu     rwLock
-	m      map[string]*entry
+	t      table
 	keys   atomic.Int64
 	mem    atomic.Int64
 	writes atomic.Uint64
@@ -196,7 +201,7 @@ func New(opts Options) *BoltCache {
 		stop:   make(chan struct{}),
 	}
 	for i := range c.shards {
-		c.shards[i].m = make(map[string]*entry)
+		c.shards[i].t = table{seed: c.seed, withMeta: opts.limited()}
 	}
 	c.Tx = &Tx{c: c}
 
@@ -216,21 +221,23 @@ func (c *BoltCache) Close() {
 // Options returns the effective options.
 func (c *BoltCache) Options() Options { return c.opts }
 
-func (c *BoltCache) shardIndex(key string) int {
-	return int(maphash.String(c.seed, key) & (shardCount - 1))
-}
+// hash is a key's 64-bit hash: its low bits pick the shard, the rest are
+// used inside the shard's table.
+func (c *BoltCache) hash(key string) uint64 { return maphash.String(c.seed, key) }
+
+func (c *BoltCache) shardIndex(key string) int { return int(c.hash(key) & (shardCount - 1)) }
 
 func now() int64 { return time.Now().UnixNano() }
 
 // touch records an access for the eviction policies. It's skipped when no
 // limit is configured so unbounded caches don't pay for it.
-func (c *BoltCache) touch(e *entry) {
-	if !c.opts.limited() {
+func (c *BoltCache) touch(meta *atomic.Uint64) {
+	if !c.opts.limited() || meta == nil {
 		return
 	}
-	e.setAccess(now())
+	setAccess(meta, now())
 	if c.opts.EvictionPolicy == PolicyLFU {
-		lfuIncr(e)
+		lfuIncr(meta)
 	}
 }
 
@@ -248,11 +255,12 @@ func (c *BoltCache) Stats() Stats {
 		st.Misses += s.misses.Load()
 		st.Writes += s.writes.Load()
 		s.mu.RLock()
-		for _, e := range s.m {
-			if e.expireAt != 0 {
+		s.t.each(func(i int) bool {
+			if _, _, exp := s.info(i); exp != 0 {
 				st.KeysWithTTL++
 			}
-		}
+			return true
+		})
 		s.mu.RUnlock()
 	}
 	return st
@@ -367,25 +375,88 @@ func (t *Tx) unlockWrite(i int) {
 	}
 }
 
-// view runs fn with the live entry for key (nil when absent or expired)
-// under a read lock. fn must not mutate the entry.
-func (t *Tx) view(key string, fn func(e *entry) error) error {
+// info returns the key, kind and expiration of the key in slot i.
+func (s *shard) info(i int) (key string, kind Kind, expireAt int64) {
+	r := s.t.decode(s.t.slots[i])
+	if r.kind != KindString {
+		return r.key, r.kind, s.t.coll(r).expireAt
+	}
+	return r.key, r.kind, r.expireAt
+}
+
+// entryAt returns the value in slot i as an entry: the stored one for
+// collections, a copy for strings (whose str aliases the table's arena).
+func (s *shard) entryAt(i int) (string, *entry) {
+	r := s.t.decode(s.t.slots[i])
+	if r.kind != KindString {
+		return r.key, s.t.coll(r)
+	}
+	return r.key, &entry{kind: KindString, str: strings.Clone(r.str), expireAt: r.expireAt}
+}
+
+// metaOf returns the access metadata word of record r (e is its entry for
+// collections).
+func metaOf(r *rec, e *entry) *atomic.Uint64 {
+	if r.kind != KindString {
+		return &e.meta
+	}
+	return r.meta
+}
+
+// lookup finds key (hash h) in s, which the caller has locked. It returns
+// the slot index and decoded record, or -1 when the key is absent or
+// expired. Hits and misses are counted.
+func (c *BoltCache) lookup(s *shard, key string, h uint64) (int, rec) {
+	i := s.t.find(key, h)
+	if i >= 0 {
+		r := s.t.decode(s.t.slots[i])
+		exp := r.expireAt
+		var e *entry
+		if r.kind != KindString {
+			e = s.t.coll(r)
+			exp = e.expireAt
+		}
+		if exp == 0 || now() < exp {
+			s.hits.Add(1)
+			c.touch(metaOf(&r, e))
+			return i, r
+		}
+	}
+	s.misses.Add(1)
+	return -1, rec{}
+}
+
+// readKey locks key's shard for reading and looks it up; call the returned
+// function to unlock.
+func (t *Tx) readKey(key string) (*shard, int, rec, func(), error) {
 	c := t.c
-	i := c.shardIndex(key)
-	if err := t.lockRead(i); err != nil {
+	h := c.hash(key)
+	si := int(h & (shardCount - 1))
+	if err := t.lockRead(si); err != nil {
+		return nil, -1, rec{}, nil, err
+	}
+	s := &c.shards[si]
+	i, r := c.lookup(s, key, h)
+	return s, i, r, func() { t.unlockRead(si) }, nil
+}
+
+// view runs fn with the live entry for key (nil when absent or expired)
+// under a read lock. fn must not mutate the entry. Strings are passed as a
+// copy (the table may overwrite values in place); hot paths read records
+// directly instead (see readKey).
+func (t *Tx) view(key string, fn func(e *entry) error) error {
+	s, i, r, unlock, err := t.readKey(key)
+	if err != nil {
 		return err
 	}
-	defer t.unlockRead(i)
-	s := &c.shards[i]
-	e := s.m[key]
-	if e != nil && e.expiredNow() {
-		e = nil
-	}
-	if e != nil {
-		s.hits.Add(1)
-		c.touch(e)
-	} else {
-		s.misses.Add(1)
+	defer unlock()
+	var e *entry
+	if i >= 0 {
+		if r.kind == KindString {
+			e = &entry{kind: KindString, str: strings.Clone(r.str), expireAt: r.expireAt}
+		} else {
+			e = s.t.coll(r)
+		}
 	}
 	return fn(e)
 }
@@ -424,22 +495,50 @@ func (t *Tx) modify(key string, grows bool, fn mutator) error {
 	return nil
 }
 
+// writeKey locks key's shard for writing and looks it up, removing it if
+// it has expired; call the returned function to unlock.
+func (t *Tx) writeKey(key string) (*shard, uint64, int, rec, func(), error) {
+	c := t.c
+	h := c.hash(key)
+	si := int(h & (shardCount - 1))
+	if err := t.lockWrite(si); err != nil {
+		return nil, 0, -1, rec{}, nil, err
+	}
+	s := &c.shards[si]
+	i := s.t.find(key, h)
+	var r rec
+	if i >= 0 {
+		r = s.t.decode(s.t.slots[i])
+		exp := r.expireAt
+		if r.kind != KindString {
+			exp = s.t.coll(r).expireAt
+		}
+		if exp != 0 && now() >= exp {
+			c.removeSlot(s, i, key)
+			c.expired.Add(1)
+			i = -1
+		}
+	}
+	return s, h, i, r, func() { t.unlockWrite(si) }, nil
+}
+
 func (t *Tx) modifyLocked(key string, fn mutator) error {
 	c := t.c
-	i := c.shardIndex(key)
-	if err := t.lockWrite(i); err != nil {
+	s, h, i, r, unlock, err := t.writeKey(key)
+	if err != nil {
 		return err
 	}
-	defer t.unlockWrite(i)
-	s := &c.shards[i]
-	e := s.m[key]
-	if e != nil && e.expiredNow() {
-		c.removeLocked(s, key, e)
-		c.expired.Add(1)
-		e = nil
-	}
+	defer unlock()
+	var e *entry
 	var oldSize int64
-	if e != nil {
+	var orig string
+	if i >= 0 {
+		if r.kind == KindString {
+			orig = strings.Clone(r.str)
+			e = &entry{kind: KindString, str: orig, expireAt: r.expireAt}
+		} else {
+			e = s.t.coll(r)
+		}
 		oldSize = e.memSize(key)
 	}
 	ne, err := fn(e)
@@ -448,38 +547,74 @@ func (t *Tx) modifyLocked(key string, fn mutator) error {
 	}
 	switch {
 	case ne == nil:
-		if e != nil {
-			delete(s.m, key)
-			c.account(s, -1, -oldSize)
+		if e == nil {
+			return nil
 		}
-	case e == nil:
-		s.m[key] = ne
-		c.account(s, 1, ne.memSize(key))
-		c.touch(ne)
+		s.t.remove(i)
+		c.account(s, -1, -oldSize)
+	case ne.kind == KindString:
+		if e != nil && r.kind == KindString && sameString(ne.str, orig) {
+			if ne.expireAt == r.expireAt {
+				return nil // unchanged (e.g. SET NX on an existing key)
+			}
+			s.t.setExpire(i, key, h, ne.expireAt)
+		} else {
+			c.storeString(s, key, h, ne.str, ne.expireAt, r.meta)
+		}
+		c.account(s, b2i(e == nil), ne.memSize(key)-oldSize)
 	default:
-		// Re-storing the key when it shares an allocation with the new
-		// string value (see adjacent) releases the one holding the old
-		// value, which the map key would otherwise keep alive.
-		if ne != e || (ne.kind == KindString && adjacent(key, ne.str)) {
-			s.m[key] = ne
+		if ne != e {
+			s.t.putColl(key, ne, h)
 		}
-		c.account(s, 0, ne.memSize(key)-oldSize)
-		c.touch(ne)
+		c.touch(&ne.meta)
+		c.account(s, b2i(e == nil), ne.memSize(key)-oldSize)
 	}
 	s.bumpWrites()
 	return nil
 }
 
-// adjacent reports whether val starts right where key ends, i.e. both are
-// slices of one allocation, as the RESP server passes SET's arguments.
-func adjacent(key, val string) bool {
-	return len(val) > 0 &&
-		uintptr(unsafe.Pointer(unsafe.StringData(key)))+uintptr(len(key)) == uintptr(unsafe.Pointer(unsafe.StringData(val)))
+// storeString writes a string record, carrying over the access metadata of
+// the record it replaces (nil for a new key).
+func (c *BoltCache) storeString(s *shard, key string, h uint64, val string, expireAt int64, oldMeta *atomic.Uint64) {
+	var m uint64
+	if oldMeta != nil {
+		m = oldMeta.Load()
+	}
+	j := s.t.putString(key, val, expireAt, h)
+	if s.t.withMeta {
+		r := s.t.decode(s.t.slots[j])
+		r.meta.Store(m)
+		c.touch(r.meta)
+	}
 }
 
-func (c *BoltCache) removeLocked(s *shard, key string, e *entry) {
-	delete(s.m, key)
-	c.account(s, -1, -e.memSize(key))
+// sameString reports whether a and b are the same string in memory (not
+// merely equal).
+func sameString(a, b string) bool {
+	return len(a) == len(b) && unsafe.StringData(a) == unsafe.StringData(b)
+}
+
+func b2i(b bool) int64 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// memSizeAt returns the accounted size of key, which is in slot i.
+func (s *shard) memSizeAt(i int, key string) int64 {
+	r := s.t.decode(s.t.slots[i])
+	if r.kind != KindString {
+		return s.t.coll(r).memSize(key)
+	}
+	return stringSize(key, r.str)
+}
+
+// removeSlot deletes the key in slot i of s, which the caller holds
+// locked.
+func (c *BoltCache) removeSlot(s *shard, i int, key string) {
+	c.account(s, -1, -s.memSizeAt(i, key))
+	s.t.remove(i)
 	s.bumpWrites()
 }
 

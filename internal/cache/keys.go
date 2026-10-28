@@ -188,16 +188,20 @@ func (t *Tx) Keys(pattern string) ([]string, error) {
 	literal := glob.IsLiteral(pattern)
 	err := t.eachShard(false, func(s *shard) bool {
 		if literal {
-			if e, ok := s.m[pattern]; ok && !e.expired(ts) {
-				out = append(out, pattern)
+			if i := s.t.find(pattern, t.c.hash(pattern)); i >= 0 {
+				if _, _, exp := s.info(i); exp == 0 || ts < exp {
+					out = append(out, pattern)
+				}
 			}
 			return true
 		}
-		for k, e := range s.m {
-			if !e.expired(ts) && glob.Match(pattern, k) {
+		s.t.each(func(i int) bool {
+			k, _, exp := s.info(i)
+			if (exp == 0 || ts < exp) && glob.Match(pattern, k) {
 				out = append(out, k)
 			}
-		}
+			return true
+		})
 		return true
 	})
 	sort.Strings(out)
@@ -222,18 +226,17 @@ func (t *Tx) Scan(cursor uint64, pattern string, count int, kind Kind) (next uin
 	i := int(cursor)
 	for ; i < shardCount && len(keys) < count; i++ {
 		t.withShard(i, false, func(s *shard) {
-			for k, e := range s.m {
-				if e.expired(ts) {
-					continue
+			s.t.each(func(j int) bool {
+				k, kd, exp := s.info(j)
+				switch {
+				case exp != 0 && ts >= exp:
+				case kind != KindNone && kd != kind:
+				case pattern != "" && pattern != "*" && !glob.Match(pattern, k):
+				default:
+					keys = append(keys, k)
 				}
-				if kind != KindNone && e.kind != kind {
-					continue
-				}
-				if pattern != "" && pattern != "*" && !glob.Match(pattern, k) {
-					continue
-				}
-				keys = append(keys, k)
-			}
+				return true
+			})
 		})
 	}
 	if i >= shardCount {
@@ -253,10 +256,15 @@ func (t *Tx) RandomKey() (string, bool, error) {
 		var found string
 		ok := false
 		t.withShard((start+n)%shardCount, false, func(s *shard) {
-			for k, e := range s.m {
-				if !e.expired(ts) {
-					found, ok = k, true
-					break
+			if n := len(s.t.slots); n > 0 {
+				for j, k := rand.IntN(n), 0; k < n; j, k = (j+1)%n, k+1 {
+					if s.t.slots[j] <= slotTomb {
+						continue
+					}
+					if key, _, exp := s.info(j); exp == 0 || ts < exp {
+						found, ok = key, true
+						break
+					}
 				}
 			}
 		})
@@ -271,11 +279,11 @@ func (t *Tx) RandomKey() (string, bool, error) {
 func (t *Tx) FlushAll() error {
 	c := t.c
 	return t.eachShard(true, func(s *shard) bool {
-		if len(s.m) == 0 {
+		if s.t.count == 0 {
 			return true
 		}
 		n, mem := s.keys.Load(), s.mem.Load()
-		s.m = make(map[string]*entry)
+		s.t.reset()
 		c.account(s, -n, -mem)
 		s.bumpWrites()
 		return true

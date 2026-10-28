@@ -70,12 +70,13 @@ func (c *BoltCache) Snapshot(w io.Writer) (int, error) {
 		ts := now()
 		batch = batch[:0]
 		s.mu.RLock()
-		for k, e := range s.m {
-			if e.expired(ts) {
-				continue
+		s.t.each(func(j int) bool {
+			k, e := s.entryAt(j)
+			if !e.expired(ts) {
+				batch = append(batch, toSnapEntry(k, e))
 			}
-			batch = append(batch, toSnapEntry(k, e))
-		}
+			return true
+		})
 		s.mu.RUnlock()
 		for j := range batch {
 			if err := enc.Encode(encodeBinary(batch[j])); err != nil {
@@ -291,14 +292,19 @@ func (c *BoltCache) restore(key string, e *entry) bool {
 			return false
 		}
 	}
-	s := &c.shards[c.shardIndex(key)]
+	h := c.hash(key)
+	s := &c.shards[h&(shardCount-1)]
 	s.mu.Lock()
-	if old, ok := s.m[key]; ok {
-		c.removeLocked(s, key, old)
+	if i := s.t.find(key, h); i >= 0 {
+		c.removeSlot(s, i, key)
 	}
-	s.m[key] = e
+	if e.kind == KindString {
+		c.storeString(s, key, h, e.str, e.expireAt, nil)
+	} else {
+		s.t.putColl(key, e, h)
+		c.touch(&e.meta)
+	}
 	c.account(s, 1, e.memSize(key))
-	e.setAccess(now())
 	s.mu.Unlock()
 	return true
 }

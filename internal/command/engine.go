@@ -7,7 +7,6 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"runtime"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -222,8 +221,13 @@ func (e *Engine) execSpec(s *Session, sp *spec, args []string, w resp.Writer) {
 			w.Error(err)
 			return
 		}
-		// Clone: transports may reuse the argument slice after Exec returns.
-		s.queue = append(s.queue, slices.Clone(args))
+		// Copy: transports may reuse the argument slice and, for commands
+		// that don't retain them, the strings' memory after Exec returns.
+		q := make([]string, len(args))
+		for i, a := range args {
+			q[i] = strings.Clone(a)
+		}
+		s.queue = append(s.queue, q)
 		w.Simple("QUEUED")
 		return
 	}

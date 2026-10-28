@@ -32,12 +32,9 @@ func registerStringCommands() {
 }
 
 func cmdGet(_ *Engine, _ *Session, db *cache.Tx, args []string, w resp.Writer) {
-	v, ok, err := db.Get(args[1])
-	if err != nil {
+	if err := db.GetTo(args[1], w); err != nil {
 		writeErr(w, err)
-		return
 	}
-	writeOptional(w, v, ok)
 }
 
 // parseSetArgs parses SET options: EX|PX|EXAT|PXAT|KEEPTTL, NX|XX and GET.
