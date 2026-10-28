@@ -129,10 +129,11 @@ print(round(statistics.median(v) / 100, 2))")"
 # DATA_SIZE-byte values, and again after overwriting all of them once
 # (which shows memory that overwritten values leave behind). RSS is read
 # from /proc through a sidecar sharing the server's PID namespace, since
-# some images have no shell.
+# some images have no shell, and summed over the container's processes
+# since some images run the server under an init process.
 rss_kb() {
   docker run --rm --pid container:bench-server "$REDIS_IMAGE" \
-    sh -c 'grep VmRSS /proc/1/status' | awk '{print $2}'
+    sh -c 'cat /proc/[0-9]*/status 2>/dev/null' | awk '/^VmRSS/{s+=$2} END{print s}'
 }
 load_keys() {
   docker run --rm --network host --cpuset-cpus "$CLIENT_CPUS" "$MEMTIER_IMAGE" \
