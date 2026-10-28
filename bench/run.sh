@@ -18,7 +18,7 @@ ROUNDS="${ROUNDS:-3}"
 CLIENTS="${CLIENTS:-50}"
 REQUESTS="${REQUESTS:-500000}"
 PIPELINE_REQUESTS="${PIPELINE_REQUESTS:-2000000}"
-TESTS="${TESTS:-set,get,incr,lpush,hset,zadd}"
+TESTS="${TESTS:-set,get,incr,lpush,sadd,hset,zadd,mset}"
 KEYSPACE="${KEYSPACE:-100000}"
 DATA_SIZE="${DATA_SIZE:-32}"
 
@@ -28,6 +28,7 @@ DRAGONFLY_IMAGE="${DRAGONFLY_IMAGE:-docker.dragonflydb.io/dragonflydb/dragonfly:
 BOLTCACHE_IMAGE="${BOLTCACHE_IMAGE:-boltcache:bench}"
 MEMTIER_IMAGE="${MEMTIER_IMAGE:-redislabs/memtier_benchmark:2.1.4}"
 MEMTIER_SECONDS="${MEMTIER_SECONDS:-15}"
+MEMORY_KEYS="${MEMORY_KEYS:-1000000}"
 
 cpu_count() { # "0,1" -> 2, "0-3" -> 4
   python3 -c "import sys
@@ -124,6 +125,33 @@ print(round(statistics.median(v) / 100, 2))")"
   rm -f "$stats"
 }
 
+# Memory: resident memory per key after writing MEMORY_KEYS keys with
+# DATA_SIZE-byte values, and again after overwriting all of them once
+# (which shows memory that overwritten values leave behind). RSS is read
+# from /proc through a sidecar sharing the server's PID namespace, since
+# some images have no shell.
+rss_kb() {
+  docker run --rm --pid container:bench-server "$REDIS_IMAGE" \
+    sh -c 'grep VmRSS /proc/1/status' | awk '{print $2}'
+}
+load_keys() {
+  docker run --rm --network host --cpuset-cpus "$CLIENT_CPUS" "$MEMTIER_IMAGE" \
+    -s 127.0.0.1 -p "$PORT" -t "$CLIENT_THREADS" -c 4 --pipeline 16 --ratio 1:0 \
+    --key-pattern P:P --key-minimum 1 --key-maximum "$MEMORY_KEYS" --requests allkeys \
+    -d "$DATA_SIZE" --hide-histogram >/dev/null 2>&1
+}
+memory() { # prints "bytes_per_key_after_load bytes_per_key_after_overwrite"
+  local base loaded over
+  base=$(rss_kb)
+  load_keys
+  sleep 2
+  loaded=$(rss_kb)
+  load_keys
+  sleep 2
+  over=$(rss_kb)
+  echo "$(( (loaded - base) * 1024 / MEMORY_KEYS )) $(( (over - base) * 1024 / MEMORY_KEYS ))"
+}
+
 for entry in "${SERVERS[@]}"; do
   IFS='|' read -r name image cmd <<<"$entry"
   slug=$(echo "$name" | tr 'A-Z ()' 'a-z_' | tr -cd 'a-z0-9_-')
@@ -138,6 +166,10 @@ for entry in "${SERVERS[@]}"; do
       stop_server
     done
   done
+  log "$name, memory"
+  start_server "$image" "$cmd"
+  memory >"$OUT/${slug}_memory.txt"
+  stop_server
   echo "$name|$image" >>"$OUT/servers.txt"
 done
 
@@ -146,7 +178,7 @@ done
   echo "cpus=$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
   echo "kernel=$(uname -sr)"
   echo "server_cpus=$SERVER_CPUS client_cpus=$CLIENT_CPUS threads=$THREADS"
-  echo "clients=$CLIENTS requests=$REQUESTS pipeline_requests=$PIPELINE_REQUESTS keyspace=$KEYSPACE data_size=$DATA_SIZE rounds=$ROUNDS"
+  echo "clients=$CLIENTS requests=$REQUESTS pipeline_requests=$PIPELINE_REQUESTS keyspace=$KEYSPACE data_size=$DATA_SIZE rounds=$ROUNDS memory_keys=$MEMORY_KEYS"
   echo "boltcache_commit=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 } >"$OUT/env.txt"
 

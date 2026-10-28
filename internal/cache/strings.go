@@ -7,13 +7,10 @@ import (
 )
 
 func newString(key, val string) *entry {
-	return &entry{kind: KindString, str: val, size: entryOverhead + int64(len(key)+len(val))}
+	return &entry{kind: KindString, str: val}
 }
 
-func (e *entry) setString(val string) {
-	e.size += int64(len(val) - len(e.str))
-	e.str = val
-}
+func (e *entry) setString(val string) { e.str = val }
 
 // Get returns the string value at key.
 func (t *Tx) Get(key string) (string, bool, error) {
@@ -101,6 +98,55 @@ func (t *Tx) SetWithOptions(key, val string, opts SetOptions, wantOld bool) (Set
 		return ne, nil
 	})
 	return res, err
+}
+
+// MSet stores pairs (key, value, key, value...) of plain strings, like
+// Set with no TTL for each pair. Inside Atomic, where every key's shard is
+// already held, it skips Set's per-key machinery: MSET writes many keys and
+// that overhead dominated it.
+func (t *Tx) MSet(pairs []string) error {
+	if !t.atomic {
+		for i := 0; i+1 < len(pairs); i += 2 {
+			if err := t.Set(pairs[i], pairs[i+1], 0); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	c := t.c
+	// Check every key first so an undeclared one doesn't leave MSET half
+	// done.
+	for i := 0; i+1 < len(pairs); i += 2 {
+		if !t.holds(c.shardIndex(pairs[i])) {
+			return ErrUndeclaredKey
+		}
+	}
+	for i := 0; i+1 < len(pairs); i += 2 {
+		key, val := pairs[i], pairs[i+1]
+		s := &c.shards[c.shardIndex(key)]
+		e := s.m[key]
+		switch {
+		case e != nil && e.kind == KindString:
+			// Same as SetWithOptions' in-place overwrite (see modifyLocked).
+			old := e.memSize(key)
+			e.str, e.expireAt = val, 0
+			if adjacent(key, val) {
+				s.m[key] = e
+			}
+			c.account(s, 0, e.memSize(key)-old)
+			c.touch(e)
+		case e != nil:
+			c.removeLocked(s, key, e)
+			fallthrough
+		default:
+			ne := newString(key, val)
+			s.m[key] = ne
+			c.account(s, 1, ne.memSize(key))
+			c.touch(ne)
+		}
+		s.bumpWrites()
+	}
+	return nil
 }
 
 // MGet returns the values for keys; missing or non-string keys yield ok=false.

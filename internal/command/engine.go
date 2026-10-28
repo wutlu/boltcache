@@ -6,8 +6,10 @@ package command
 import (
 	"crypto/subtle"
 	"fmt"
+	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -53,6 +55,8 @@ type Engine struct {
 	nextID   atomic.Int64
 	commands stripedCounter
 	rejected stripedCounter
+
+	combine []combineQueue // per cache shard, see combineBatch
 }
 
 // New creates an engine.
@@ -66,7 +70,8 @@ func New(c *cache.BoltCache, hub *pubsub.Hub, cfg Config) *Engine {
 	if hub == nil {
 		hub = pubsub.NewHub()
 	}
-	return &Engine{cache: c, hub: hub, cfg: cfg, scripts: newScriptCache(), started: time.Now()}
+	return &Engine{cache: c, hub: hub, cfg: cfg, scripts: newScriptCache(), started: time.Now(),
+		combine: make([]combineQueue, c.ShardCount())}
 }
 
 // Cache returns the underlying cache.
@@ -120,8 +125,14 @@ type Session struct {
 	// Scratch space reused by ExecPipeline.
 	pipeSpecs  []*spec
 	pipeShards []int
-	inScript   bool
-	created    time.Time
+	combineReq *batchReq
+	// While pipelining, executed commands are tallied in pipeCommands and
+	// added to Engine.commands once at the end: an atomic add per command
+	// costs more than a simple command itself.
+	pipelining   bool
+	pipeCommands uint64
+	inScript     bool
+	created      time.Time
 }
 
 // NewSession creates a session; it's pre-authenticated when no password is
@@ -262,22 +273,18 @@ func (e *Engine) run(s *Session, sp *spec, args []string, w resp.Writer) {
 		w.Error(cache.ErrOOM.Error())
 		return
 	}
-	e.commands.add(s.ID)
+	if s.pipelining {
+		s.pipeCommands++ // counted once per pipeline, see ExecPipeline
+	} else {
+		e.commands.add(s.ID)
+	}
 	if s.tx != nil {
 		sp.fn(e, s, s.tx, args, w)
 		return
 	}
 	if sp.flags&flagNoKeys == 0 {
 		if sp.multiKey(args) {
-			err := e.cache.Atomic(sp.keys(args), false, func(tx *cache.Tx) error {
-				s.tx = tx
-				defer func() { s.tx = nil }()
-				sp.fn(e, s, tx, args, w)
-				return nil
-			})
-			if err != nil {
-				w.Error(err.Error())
-			}
+			e.runLocked(s, sp, args, w, e.cache.Begin(sp.keys(args), false))
 			return
 		}
 	}
@@ -299,6 +306,14 @@ func (e *Engine) ExecPipeline(s *Session, cmds [][]string, w resp.Writer) {
 		s.pipeShards = make([]int, len(cmds))
 	}
 	specs, shards := s.pipeSpecs[:len(cmds)], s.pipeShards[:len(cmds)]
+	s.pipelining = true
+	defer func() {
+		s.pipelining = false
+		if s.pipeCommands > 0 {
+			e.commands.addN(s.ID, s.pipeCommands)
+			s.pipeCommands = 0
+		}
+	}()
 	for i, c := range cmds {
 		if len(c) == 0 {
 			shards[i] = -1
@@ -328,15 +343,28 @@ func (e *Engine) ExecPipeline(s *Session, cmds [][]string, w resp.Writer) {
 			continue
 		}
 		key, _ := specs[i].singleKey(cmds[i])
-		_ = e.cache.Atomic([]string{key}, false, func(tx *cache.Tx) error {
-			s.tx, s.batch = tx, true
-			defer func() { s.tx, s.batch = nil, false }()
-			for k := i; k < j; k++ {
-				e.execSpec(s, specs[k], cmds[k], w)
-			}
-			return nil
-		})
+		e.combineBatch(s, shards[i], key, specs[i:j], cmds[i:j], w)
 		i = j
+	}
+}
+
+// runLocked runs sp with s holding tx (from cache.Begin), releasing it
+// afterwards even if the command panics.
+func (e *Engine) runLocked(s *Session, sp *spec, args []string, w resp.Writer, tx *cache.Tx) {
+	s.tx = tx
+	defer func() {
+		s.tx = nil
+		tx.End()
+	}()
+	sp.fn(e, s, tx, args, w)
+}
+
+// runBatchTx runs a pipeline batch whose commands all live in tx's shard.
+func (e *Engine) runBatchTx(s *Session, specs []*spec, cmds [][]string, w resp.Writer, tx *cache.Tx) {
+	s.tx, s.batch = tx, true
+	defer func() { s.tx, s.batch = nil, false }()
+	for k := range cmds {
+		e.execSpec(s, specs[k], cmds[k], w)
 	}
 }
 
@@ -363,4 +391,109 @@ func (e *Engine) Stats() (commands, rejected uint64) {
 // writeErr writes err using Redis error conventions.
 func writeErr(w resp.Writer, err error) {
 	w.Error(err.Error())
+}
+
+// Hot-shard batches use flat combining: while a shard is busy, other event
+// loops don't wait for its lock but queue their batch, and whoever holds
+// the lock runs the queued batches before releasing it. The shard's data
+// then stays in one core's cache instead of bouncing between cores with
+// every lock handoff, which is what limits a hot key (one leaderboard, one
+// queue) under many concurrent clients.
+
+// combineQueue holds the batches waiting for one shard.
+type combineQueue struct {
+	mu    sync.Mutex
+	reqs  []*batchReq
+	spare []*batchReq
+	_     [64]byte
+}
+
+// batchReq is a pipeline batch handed to a combiner. Its owner spins until
+// done is set; the combiner writes the replies to w.
+type batchReq struct {
+	s     *Session
+	specs []*spec
+	cmds  [][]string
+	w     resp.Writer
+	done  atomic.Bool
+	panic any
+}
+
+// combineMaxRounds bounds how many queue drains a combiner does before
+// returning to its own connection.
+const combineMaxRounds = 8
+
+func (e *Engine) combineBatch(s *Session, shard int, key string, specs []*spec, cmds [][]string, w resp.Writer) {
+	if tx := e.cache.TryBeginKey(key); tx != nil {
+		func() {
+			defer tx.End()
+			e.runBatchTx(s, specs, cmds, w, tx)
+			e.drain(shard, tx)
+		}()
+		return
+	}
+	if s.combineReq == nil {
+		s.combineReq = new(batchReq)
+	}
+	req := s.combineReq
+	req.s, req.specs, req.cmds, req.w, req.panic = s, specs, cmds, w, nil
+	req.done.Store(false)
+	q := &e.combine[shard]
+	q.mu.Lock()
+	q.reqs = append(q.reqs, req)
+	q.mu.Unlock()
+	for spins := 0; !req.done.Load(); spins++ {
+		if tx := e.cache.TryBeginKey(key); tx != nil {
+			func() {
+				defer tx.End()
+				e.drain(shard, tx)
+			}()
+			continue
+		}
+		if spins > 64 {
+			runtime.Gosched()
+		}
+	}
+	p := req.panic
+	req.s, req.specs, req.cmds, req.w, req.panic = nil, nil, nil, nil, nil
+	if p != nil {
+		panic(p)
+	}
+}
+
+// drain runs queued batches for shard while holding its lock (tx).
+func (e *Engine) drain(shard int, tx *cache.Tx) {
+	q := &e.combine[shard]
+	for round := 0; round < combineMaxRounds; round++ {
+		q.mu.Lock()
+		reqs := q.reqs
+		if len(reqs) == 0 {
+			q.mu.Unlock()
+			return
+		}
+		q.reqs, q.spare = q.spare[:0], nil
+		q.mu.Unlock()
+		for i, r := range reqs {
+			e.runQueued(r, tx)
+			reqs[i] = nil
+		}
+		q.mu.Lock()
+		if q.spare == nil {
+			q.spare = reqs[:0]
+		}
+		q.mu.Unlock()
+	}
+}
+
+// runQueued runs r for its owner; a panic is handed to the owner so the
+// right connection is closed.
+func (e *Engine) runQueued(r *batchReq, tx *cache.Tx) {
+	defer func() {
+		if p := recover(); p != nil {
+			r.s.tx, r.s.batch = nil, false
+			r.panic = p
+		}
+		r.done.Store(true)
+	}()
+	e.runBatchTx(r.s, r.specs, r.cmds, r.w, tx)
 }

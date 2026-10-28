@@ -63,6 +63,7 @@ type protoConn struct {
 	in      []byte     // unconsumed input (a partially received command)
 	batch   [][]string // commands parsed in the current read
 	arena   []string   // backing storage for the argument slices in batch
+	cmdName string     // last command name, reused while clients repeat it
 
 	textPush atomic.Bool  // deliver pub/sub messages in the legacy format
 	pending  atomic.Int64 // queued async push bytes
@@ -255,23 +256,31 @@ func (ps *protoServer) OnTraffic(gc gnet.Conn) (action gnet.Action) {
 }
 
 // toStrings converts a parsed command to strings with a single allocation:
-// all arguments are copied into one string and sliced from it. The []string
-// itself comes from pc.arena, which is reused on the next read, so the
-// engine must not keep argument slices (MULTI copies queued commands).
+// the arguments after the command name are copied into one string and
+// sliced from it. Values the cache stores keep that string alive, so it
+// holds nothing else: for SET it's exactly key+value, which the cache
+// relies on to store both in one allocation. The command name is reused
+// across commands. The []string itself comes from pc.arena, which is reused
+// on the next read, so the engine must not keep argument slices (MULTI
+// copies queued commands).
 func (pc *protoConn) toStrings(args [][]byte) []string {
+	start := len(pc.arena)
+	if string(args[0]) != pc.cmdName {
+		pc.cmdName = string(args[0])
+	}
+	pc.arena = append(pc.arena, pc.cmdName)
 	total := 0
-	for _, a := range args {
+	for _, a := range args[1:] {
 		total += len(a)
 	}
 	var b strings.Builder
 	b.Grow(total)
-	for _, a := range args {
+	for _, a := range args[1:] {
 		b.Write(a)
 	}
 	joined := b.String()
-	start := len(pc.arena)
 	off := 0
-	for _, a := range args {
+	for _, a := range args[1:] {
 		pc.arena = append(pc.arena, joined[off:off+len(a)])
 		off += len(a)
 	}

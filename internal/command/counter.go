@@ -12,7 +12,9 @@ type stripedCounter struct {
 	}
 }
 
-func (c *stripedCounter) add(id int64) { c.cells[uint64(id)%64].n.Add(1) }
+func (c *stripedCounter) add(id int64) { c.addN(id, 1) }
+
+func (c *stripedCounter) addN(id int64, n uint64) { c.cells[uint64(id)%64].n.Add(n) }
 
 func (c *stripedCounter) load() uint64 {
 	var total uint64

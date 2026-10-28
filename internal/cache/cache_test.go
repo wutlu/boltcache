@@ -7,10 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 func newTestCache(t *testing.T, opts Options) *BoltCache {
@@ -699,5 +701,75 @@ func TestRenameToUndeclaredKeyKeepsSource(t *testing.T) {
 	}
 	if v, ok, _ := c.Get("src"); !ok || v != "keep" {
 		t.Fatalf("source lost: %q %v", v, ok)
+	}
+}
+
+// One entry per key makes its size the main fixed memory cost; keep it in
+// the 48-byte size class.
+func TestEntrySize(t *testing.T) {
+	if n := unsafe.Sizeof(entry{}); n > 48 {
+		t.Fatalf("entry is %d bytes, want <= 48", n)
+	}
+}
+
+// Overwriting a string set from adjacent key/value arguments (how the RESP
+// server passes them) must not keep the old value's allocation alive via
+// the map key.
+func TestOverwriteReleasesOldValue(t *testing.T) {
+	c := newTestCache(t, Options{})
+	set := func(v string) {
+		joined := "k" + v // key and value in one allocation
+		if err := c.Set(joined[:1], joined[1:], 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	set(strings.Repeat("a", 64))
+	set(strings.Repeat("b", 64))
+	s := &c.shards[c.shardIndex("k")]
+	for k, e := range s.m {
+		if !adjacent(k, e.str) {
+			t.Fatal("map key still references the first value's allocation")
+		}
+	}
+}
+
+func TestMSetAtomicOverwritesAndAccounting(t *testing.T) {
+	c := newTestCache(t, Options{})
+	if _, err := c.LPush("l", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Set("ttl", "v", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	keys := []string{"l", "ttl", "new"}
+	err := c.Atomic(keys, false, func(tx *Tx) error {
+		return tx.MSet([]string{"l", "1", "ttl", "2", "new", "3"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, k := range keys {
+		v, ok, err := c.Get(k)
+		if err != nil || !ok || v != strconv.Itoa(i+1) {
+			t.Fatalf("%s = %q %v %v", k, v, ok, err)
+		}
+	}
+	if d, state, _ := c.TTL("ttl"); state != TTLNoExpire {
+		t.Fatalf("MSET kept a TTL: %v (state %d)", d, state)
+	}
+	// Undeclared keys are rejected before anything is written.
+	err = c.Atomic([]string{"l"}, false, func(tx *Tx) error {
+		return tx.MSet([]string{"l", "9", "other-shard-key", "9"})
+	})
+	if v, _, _ := c.Get("l"); err == nil && c.ShardOf("other-shard-key") != c.ShardOf("l") || v != "1" {
+		t.Fatalf("undeclared key: err=%v l=%q", err, v)
+	}
+	for _, k := range keys {
+		if _, err := c.Delete(k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if c.Len() != 0 || c.UsedMemory() != 0 {
+		t.Fatalf("after delete: %d keys, %d bytes", c.Len(), c.UsedMemory())
 	}
 }

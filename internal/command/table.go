@@ -108,7 +108,10 @@ func (sp *spec) keys(args []string) []string {
 	if step <= 0 {
 		step = 1
 	}
-	var out []string
+	if last < sp.first {
+		return nil
+	}
+	out := make([]string, 0, (last-sp.first)/step+1)
 	for i := sp.first; i <= last; i += step {
 		out = append(out, args[i])
 	}

@@ -99,20 +99,20 @@ func toSnapEntry(k string, e *entry) snapEntry {
 	case KindString:
 		se.S = e.str
 	case KindList:
-		se.L = e.list.Values()
+		se.L = e.col.list.Values()
 	case KindSet:
-		se.M = make([]string, 0, len(e.set))
-		for m := range e.set {
+		se.M = make([]string, 0, len(e.col.set))
+		for m := range e.col.set {
 			se.M = append(se.M, m)
 		}
 	case KindHash:
-		se.H = make(map[string]string, len(e.hash))
-		for f, v := range e.hash {
+		se.H = make(map[string]string, len(e.col.hash))
+		for f, v := range e.col.hash {
 			se.H[f] = v
 		}
 	case KindZSet:
-		se.Z = make([]string, 0, 2*len(e.zset.dict))
-		for m, s := range e.zset.dict {
+		se.Z = make([]string, 0, 2*len(e.col.zset.dict))
+		for m, s := range e.col.zset.dict {
 			se.Z = append(se.Z, m, strconv.FormatFloat(s, 'g', -1, 64))
 		}
 	}
@@ -229,22 +229,22 @@ func fromSnapEntry(se snapEntry) (*entry, error) {
 	case "list":
 		e = newList(se.K)
 		for _, v := range se.L {
-			e.list.PushBack(v)
-			e.size += listItemSize(v)
+			e.col.list.PushBack(v)
+			e.col.size += listItemSize(v)
 		}
 	case "set":
 		e = newSet(se.K)
 		for _, m := range se.M {
-			if _, ok := e.set[m]; !ok {
-				e.set[m] = struct{}{}
-				e.size += setMemberSize(m)
+			if _, ok := e.col.set[m]; !ok {
+				e.col.set[m] = struct{}{}
+				e.col.size += setMemberSize(m)
 			}
 		}
 	case "hash":
 		e = newHash(se.K)
 		for f, v := range se.H {
-			e.hash[f] = v
-			e.size += hashFieldSize(f, v)
+			e.col.hash[f] = v
+			e.col.size += hashFieldSize(f, v)
 		}
 	case "zset":
 		if len(se.Z)%2 != 0 {
@@ -275,19 +275,19 @@ func (c *BoltCache) restore(key string, e *entry) bool {
 	}
 	switch e.kind {
 	case KindList:
-		if e.list.Len() == 0 {
+		if e.col.list.Len() == 0 {
 			return false
 		}
 	case KindSet:
-		if len(e.set) == 0 {
+		if len(e.col.set) == 0 {
 			return false
 		}
 	case KindHash:
-		if len(e.hash) == 0 {
+		if len(e.col.hash) == 0 {
 			return false
 		}
 	case KindZSet:
-		if len(e.zset.dict) == 0 {
+		if len(e.col.zset.dict) == 0 {
 			return false
 		}
 	}
@@ -297,8 +297,8 @@ func (c *BoltCache) restore(key string, e *entry) bool {
 		c.removeLocked(s, key, old)
 	}
 	s.m[key] = e
-	c.account(s, 1, e.size)
-	e.access.Store(now())
+	c.account(s, 1, e.memSize(key))
+	e.setAccess(now())
 	s.mu.Unlock()
 	return true
 }
@@ -415,8 +415,8 @@ func legacyEntry(key string, v json.RawMessage) *entry {
 		e := newList(key)
 		for _, it := range arr {
 			s := legacyScalar(it)
-			e.list.PushBack(s)
-			e.size += listItemSize(s)
+			e.col.list.PushBack(s)
+			e.col.size += listItemSize(s)
 		}
 		return e
 	case '{':
@@ -434,16 +434,16 @@ func legacyEntry(key string, v json.RawMessage) *entry {
 		if isSet {
 			e := newSet(key)
 			for m := range obj {
-				e.set[m] = struct{}{}
-				e.size += setMemberSize(m)
+				e.col.set[m] = struct{}{}
+				e.col.size += setMemberSize(m)
 			}
 			return e
 		}
 		e := newHash(key)
 		for f, fv := range obj {
 			s := legacyScalar(fv)
-			e.hash[f] = s
-			e.size += hashFieldSize(f, s)
+			e.col.hash[f] = s
+			e.col.size += hashFieldSize(f, s)
 		}
 		return e
 	default:

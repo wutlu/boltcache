@@ -257,11 +257,9 @@ func cmdMSet(_ *Engine, _ *Session, db *cache.Tx, args []string, w resp.Writer) 
 		w.Error("ERR wrong number of arguments for 'mset' command")
 		return
 	}
-	for i := 1; i < len(args); i += 2 {
-		if err := db.Set(args[i], args[i+1], 0); err != nil {
-			writeErr(w, err)
-			return
-		}
+	if err := db.MSet(args[1:]); err != nil {
+		writeErr(w, err)
+		return
 	}
 	w.Simple("OK")
 }

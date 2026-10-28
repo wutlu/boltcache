@@ -3,7 +3,7 @@ package cache
 import "sort"
 
 func newSet(key string) *entry {
-	return &entry{kind: KindSet, set: make(map[string]struct{}), size: entryOverhead + int64(len(key))}
+	return &entry{kind: KindSet, col: &coll{set: make(map[string]struct{}), size: entryOverhead + int64(len(key))}}
 }
 
 func setMemberSize(m string) int64 { return setOverhead + int64(len(m)) }
@@ -18,9 +18,9 @@ func (t *Tx) SAdd(key string, members ...string) (int, error) {
 			return nil, ErrWrongType
 		}
 		for _, m := range members {
-			if _, ok := e.set[m]; !ok {
-				e.set[m] = struct{}{}
-				e.size += setMemberSize(m)
+			if _, ok := e.col.set[m]; !ok {
+				e.col.set[m] = struct{}{}
+				e.col.size += setMemberSize(m)
 				added++
 			}
 		}
@@ -40,13 +40,13 @@ func (t *Tx) SRem(key string, members ...string) (int, error) {
 			return nil, ErrWrongType
 		}
 		for _, m := range members {
-			if _, ok := e.set[m]; ok {
-				delete(e.set, m)
-				e.size -= setMemberSize(m)
+			if _, ok := e.col.set[m]; ok {
+				delete(e.col.set, m)
+				e.col.size -= setMemberSize(m)
 				removed++
 			}
 		}
-		if len(e.set) == 0 {
+		if len(e.col.set) == 0 {
 			return nil, nil
 		}
 		return e, nil
@@ -62,7 +62,7 @@ func (t *Tx) viewSet(key string, fn func(s map[string]struct{})) error {
 		if e.kind != KindSet {
 			return ErrWrongType
 		}
-		fn(e.set)
+		fn(e.col.set)
 		return nil
 	})
 }
@@ -115,17 +115,17 @@ func (t *Tx) SPop(key string, count int) ([]string, error) {
 		if e.kind != KindSet {
 			return nil, ErrWrongType
 		}
-		for m := range e.set {
+		for m := range e.col.set {
 			if len(out) >= count {
 				break
 			}
 			out = append(out, m)
 		}
 		for _, m := range out {
-			delete(e.set, m)
-			e.size -= setMemberSize(m)
+			delete(e.col.set, m)
+			e.col.size -= setMemberSize(m)
 		}
-		if len(e.set) == 0 {
+		if len(e.col.set) == 0 {
 			return nil, nil
 		}
 		return e, nil

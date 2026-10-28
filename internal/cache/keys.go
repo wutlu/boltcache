@@ -274,14 +274,10 @@ func (t *Tx) FlushAll() error {
 		if len(s.m) == 0 {
 			return true
 		}
-		var n, mem int64
-		for _, e := range s.m {
-			n++
-			mem += e.size
-		}
+		n, mem := s.keys.Load(), s.mem.Load()
 		s.m = make(map[string]*entry)
 		c.account(s, -n, -mem)
-		s.writes.Add(1)
+		s.bumpWrites()
 		return true
 	})
 }
@@ -337,7 +333,9 @@ func (t *Tx) renameLocked(src, dst string, nx bool) (bool, error) {
 	}
 	keyDelta := int64(len(dst) - len(src))
 	err = t.update(dst, func(*entry) (*entry, error) {
-		moved.size += keyDelta
+		if moved.col != nil {
+			moved.col.size += keyDelta
+		}
 		return moved, nil
 	})
 	return err == nil, err
@@ -348,7 +346,7 @@ func (t *Tx) MemoryUsage(key string) (int64, error) {
 	var n int64
 	err := t.view(key, func(e *entry) error {
 		if e != nil {
-			n = e.size
+			n = e.memSize(key)
 		}
 		return nil
 	})

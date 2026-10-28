@@ -150,29 +150,30 @@ func (c *BoltCache) evictOne() bool {
 func evictionScore(p Policy, e *entry) int64 {
 	switch p {
 	case PolicyLFU:
-		return int64(e.freq.Load())<<40 | (e.access.Load()>>20)&(1<<40-1)
+		return int64(e.freq())<<40 | e.accessed()&(1<<40-1)
 	case PolicyTTL:
 		if e.expireAt != 0 {
 			// Keys with a TTL always rank before persistent keys.
 			return e.expireAt - (1 << 62)
 		}
-		return e.access.Load()
+		return e.accessed()
 	case PolicyRandom:
 		return 0
 	default:
-		return e.access.Load()
+		return e.accessed()
 	}
 }
 
 // lfuIncr increments the logarithmic frequency counter: the higher the
 // counter, the less likely an access bumps it (same idea as Redis' LFU).
 func lfuIncr(e *entry) {
-	f := e.freq.Load()
+	m := e.meta.Load()
+	f := m >> 56
 	if f >= 255 {
 		return
 	}
 	if f < 5 || rand.Float64() < 1/float64((f-4)*10+1) {
-		e.freq.CompareAndSwap(f, f+1)
+		e.meta.CompareAndSwap(m, m+1<<56)
 	}
 }
 
@@ -206,8 +207,8 @@ func (c *BoltCache) DeleteExpired() int {
 				continue
 			}
 			if decay {
-				if f := e.freq.Load(); f > 0 {
-					e.freq.Store(f / 2)
+				if m := e.meta.Load(); m>>56 > 0 {
+					e.meta.Store(m>>56/2<<56 | m&clockMask)
 				}
 			}
 		}

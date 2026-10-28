@@ -12,11 +12,12 @@ package cache
 import (
 	"errors"
 	"hash/maphash"
-	"runtime"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 )
 
 const shardCount = 1024 // must be a power of two
@@ -71,18 +72,51 @@ const (
 	hashOverhead    = 32
 )
 
+// entry is one key's value. It's kept to 48 bytes (a Go size class) since
+// there's one per key: collection payloads live behind col, and the LRU
+// clock and LFU counter share one word.
 type entry struct {
 	kind     Kind
-	str      string
-	list     *deque
-	set      map[string]struct{}
-	hash     map[string]string
-	zset     *zset
-	expireAt int64 // unix nanoseconds, 0 = persistent
-	size     int64 // approximate bytes, including key
+	str      string // KindString value
+	col      *coll  // other kinds
+	expireAt int64  // unix nanoseconds, 0 = persistent
 
-	access atomic.Int64  // last access, unix nanoseconds (LRU)
-	freq   atomic.Uint32 // logarithmic access counter (LFU)
+	// meta holds the last access time in lruUnit ticks (LRU) in the low 56
+	// bits and the logarithmic access counter (LFU) in the high 8.
+	meta atomic.Uint64
+}
+
+// coll is the payload of a collection value.
+type coll struct {
+	size int64 // approximate bytes, including key and entry
+	list *deque
+	set  map[string]struct{}
+	hash map[string]string
+	zset *zset
+}
+
+// memSize returns the approximate bytes used by key and e.
+func (e *entry) memSize(key string) int64 {
+	if e.col != nil {
+		return e.col.size
+	}
+	return entryOverhead + int64(len(key)+len(e.str))
+}
+
+const (
+	lruShift  = 20 // LRU clock unit: 2^20ns ~ 1ms
+	clockMask = 1<<56 - 1
+)
+
+func (e *entry) accessed() int64 { return int64(e.meta.Load() & clockMask) }
+func (e *entry) freq() uint64    { return e.meta.Load() >> 56 }
+
+// setAccess records an access at unix nanoseconds ts, keeping the counter.
+// Concurrent readers may race; losing an update only makes the policy a
+// little less precise (Redis' LRU clock is approximate too).
+func (e *entry) setAccess(ts int64) {
+	m := e.meta.Load()
+	e.meta.Store(m&^clockMask | uint64(ts>>lruShift)&clockMask)
 }
 
 func (e *entry) expired(now int64) bool {
@@ -96,10 +130,12 @@ func (e *entry) expiredNow() bool {
 }
 
 // shard counters are per shard so hot paths never contend on a global
-// cache line. keys/mem/writes change only under the write lock; hits/misses
-// are bumped by concurrent readers.
+// cache line. keys/mem/writes change only under the write lock, so they're
+// updated with a load and a store instead of an atomic add (see rwLock);
+// they're atomic because readers outside the lock (INFO, WATCH) load them.
+// hits/misses are bumped by concurrent readers.
 type shard struct {
-	mu     sync.RWMutex
+	mu     rwLock
 	m      map[string]*entry
 	keys   atomic.Int64
 	mem    atomic.Int64
@@ -109,32 +145,11 @@ type shard struct {
 	_      [64]byte // keep hot mutexes on separate cache lines
 }
 
-// lockSpins bounds how often lock/rlock retry before blocking. Shard
-// critical sections take well under a microsecond, but sync.RWMutex parks
-// the OS thread after only a few spins; with many event loops hammering one
-// hot key, the futex sleep/wake round trips then dominate. Retrying a little
-// longer first is much cheaper.
-const lockSpins = 100
+func (s *shard) lock()  { s.mu.Lock() }
+func (s *shard) rlock() { s.mu.RLock() }
 
-func (s *shard) lock() {
-	for i := 0; i < lockSpins; i++ {
-		if s.mu.TryLock() {
-			return
-		}
-		runtime.Gosched()
-	}
-	s.mu.Lock()
-}
-
-func (s *shard) rlock() {
-	for i := 0; i < lockSpins; i++ {
-		if s.mu.TryRLock() {
-			return
-		}
-		runtime.Gosched()
-	}
-	s.mu.RLock()
-}
+// bumpWrites counts a mutation; callers hold the write lock.
+func (s *shard) bumpWrites() { s.writes.Store(s.writes.Load() + 1) }
 
 // Stats is a point-in-time view of cache counters.
 type Stats struct {
@@ -213,7 +228,7 @@ func (c *BoltCache) touch(e *entry) {
 	if !c.opts.limited() {
 		return
 	}
-	e.access.Store(now())
+	e.setAccess(now())
 	if c.opts.EvictionPolicy == PolicyLFU {
 		lfuIncr(e)
 	}
@@ -275,10 +290,10 @@ func (c *BoltCache) Writes() uint64 {
 // lock.
 func (c *BoltCache) account(s *shard, keys, mem int64) {
 	if keys != 0 {
-		s.keys.Add(keys)
+		s.keys.Store(s.keys.Load() + keys)
 	}
 	if mem != 0 {
-		s.mem.Add(mem)
+		s.mem.Store(s.mem.Load() + mem)
 	}
 	if c.opts.limited() {
 		if keys != 0 {
@@ -298,11 +313,21 @@ type Tx struct {
 	held   []int // sorted shard indices locked by Atomic; nil outside Atomic
 	all    bool  // every shard is held
 	atomic bool
+
+	heldBuf [16]int // backing store for small held sets
 }
 
 func (t *Tx) holds(i int) bool {
 	if t.all {
 		return true
+	}
+	if len(t.held) <= 16 {
+		for _, h := range t.held {
+			if h >= i {
+				return h == i
+			}
+		}
+		return false
 	}
 	j := sort.SearchInts(t.held, i)
 	return j < len(t.held) && t.held[j] == i
@@ -415,7 +440,7 @@ func (t *Tx) modifyLocked(key string, fn mutator) error {
 	}
 	var oldSize int64
 	if e != nil {
-		oldSize = e.size
+		oldSize = e.memSize(key)
 	}
 	ne, err := fn(e)
 	if err != nil {
@@ -429,23 +454,33 @@ func (t *Tx) modifyLocked(key string, fn mutator) error {
 		}
 	case e == nil:
 		s.m[key] = ne
-		c.account(s, 1, ne.size)
+		c.account(s, 1, ne.memSize(key))
 		c.touch(ne)
 	default:
-		if ne != e {
+		// Re-storing the key when it shares an allocation with the new
+		// string value (see adjacent) releases the one holding the old
+		// value, which the map key would otherwise keep alive.
+		if ne != e || (ne.kind == KindString && adjacent(key, ne.str)) {
 			s.m[key] = ne
 		}
-		c.account(s, 0, ne.size-oldSize)
+		c.account(s, 0, ne.memSize(key)-oldSize)
 		c.touch(ne)
 	}
-	s.writes.Add(1)
+	s.bumpWrites()
 	return nil
+}
+
+// adjacent reports whether val starts right where key ends, i.e. both are
+// slices of one allocation, as the RESP server passes SET's arguments.
+func adjacent(key, val string) bool {
+	return len(val) > 0 &&
+		uintptr(unsafe.Pointer(unsafe.StringData(key)))+uintptr(len(key)) == uintptr(unsafe.Pointer(unsafe.StringData(val)))
 }
 
 func (c *BoltCache) removeLocked(s *shard, key string, e *entry) {
 	delete(s.m, key)
-	c.account(s, -1, -e.size)
-	s.writes.Add(1)
+	c.account(s, -1, -e.memSize(key))
+	s.bumpWrites()
 }
 
 // eachShard calls fn for every shard while holding its lock. Only allowed
@@ -485,50 +520,75 @@ func (t *Tx) withShard(i int, write bool, fn func(s *shard)) {
 // with ErrUndeclaredKey. Shards are locked in ascending order, so concurrent
 // Atomic calls cannot deadlock.
 func (c *BoltCache) Atomic(keys []string, all bool, fn func(tx *Tx) error) (err error) {
-	tx := &Tx{c: c, atomic: true, all: all}
+	tx := c.Begin(keys, all)
+	// End unlocks even if fn panics, so a faulty script can't wedge the
+	// keyspace.
+	defer tx.End()
+	return fn(tx)
+}
+
+var txPool = sync.Pool{New: func() any { return new(Tx) }}
+
+// Begin is Atomic without a callback, for hot paths where the closure would
+// cost an allocation: it locks the shards owning keys (or all shards) and
+// returns their handle. The caller must call End exactly once, typically
+// deferred, and must not use the Tx afterwards.
+func (c *BoltCache) Begin(keys []string, all bool) *Tx {
+	tx := txPool.Get().(*Tx)
+	tx.c, tx.atomic, tx.all = c, true, all
 	if all {
 		for i := range c.shards {
 			c.shards[i].mu.Lock()
 		}
+		return tx
+	}
+	idx := tx.heldBuf[:0]
+	for _, k := range keys {
+		idx = append(idx, c.shardIndex(k))
+	}
+	slices.Sort(idx)
+	tx.held = slices.Compact(idx)
+	for _, i := range tx.held {
+		c.shards[i].lock()
+	}
+	return tx
+}
+
+// TryBeginKey is Begin for a single key that returns nil instead of
+// waiting when the key's shard is locked.
+func (c *BoltCache) TryBeginKey(key string) *Tx {
+	i := c.shardIndex(key)
+	if !c.shards[i].mu.TryLock() {
+		return nil
+	}
+	tx := txPool.Get().(*Tx)
+	tx.c, tx.atomic, tx.all = c, true, false
+	tx.held = append(tx.heldBuf[:0], i)
+	return tx
+}
+
+// End releases the locks taken by Begin and runs eviction if needed.
+func (t *Tx) End() {
+	c := t.c
+	if t.all {
+		for i := len(c.shards) - 1; i >= 0; i-- {
+			c.shards[i].mu.Unlock()
+		}
 	} else {
-		idx := make([]int, 0, len(keys))
-		for _, k := range keys {
-			idx = append(idx, c.shardIndex(k))
-		}
-		sort.Ints(idx)
-		held := idx[:0]
-		for j, v := range idx {
-			if j == 0 || v != idx[j-1] {
-				held = append(held, v)
-			}
-		}
-		tx.held = held
-		for _, i := range held {
-			c.shards[i].lock()
+		for j := len(t.held) - 1; j >= 0; j-- {
+			c.shards[t.held[j]].mu.Unlock()
 		}
 	}
-
-	func() {
-		// Unlock even if fn panics, so a faulty script can't wedge the keyspace.
-		defer func() {
-			if all {
-				for i := len(c.shards) - 1; i >= 0; i-- {
-					c.shards[i].mu.Unlock()
-				}
-			} else {
-				for j := len(tx.held) - 1; j >= 0; j-- {
-					c.shards[tx.held[j]].mu.Unlock()
-				}
-			}
-		}()
-		err = fn(tx)
-	}()
+	*t = Tx{}
+	txPool.Put(t)
 	c.maybeEvict()
-	return err
 }
 
 // InAtomic reports whether t is the handle of an Atomic callback.
 func (t *Tx) InAtomic() bool { return t.atomic }
+
+// ShardCount returns the number of shards (the range of ShardOf).
+func (c *BoltCache) ShardCount() int { return shardCount }
 
 // ShardOf returns the index of the shard holding key; keys with the same
 // index share a lock.

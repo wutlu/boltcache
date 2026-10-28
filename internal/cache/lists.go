@@ -1,7 +1,7 @@
 package cache
 
 func newList(key string) *entry {
-	return &entry{kind: KindList, list: &deque{}, size: entryOverhead + int64(len(key))}
+	return &entry{kind: KindList, col: &coll{list: &deque{}, size: entryOverhead + int64(len(key))}}
 }
 
 func listItemSize(v string) int64 { return elementOverhead + int64(len(v)) }
@@ -19,13 +19,13 @@ func (t *Tx) push(key string, vals []string, front, onlyIfExists bool) (int, err
 		}
 		for _, v := range vals {
 			if front {
-				e.list.PushFront(v)
+				e.col.list.PushFront(v)
 			} else {
-				e.list.PushBack(v)
+				e.col.list.PushBack(v)
 			}
-			e.size += listItemSize(v)
+			e.col.size += listItemSize(v)
 		}
-		n = e.list.Len()
+		n = e.col.list.Len()
 		return e, nil
 	})
 	return n, err
@@ -53,17 +53,17 @@ func (t *Tx) pop(key string, count int, front bool) ([]string, error) {
 		if e.kind != KindList {
 			return nil, ErrWrongType
 		}
-		for i := 0; i < count && e.list.Len() > 0; i++ {
+		for i := 0; i < count && e.col.list.Len() > 0; i++ {
 			var v string
 			if front {
-				v = e.list.PopFront()
+				v = e.col.list.PopFront()
 			} else {
-				v = e.list.PopBack()
+				v = e.col.list.PopBack()
 			}
-			e.size -= listItemSize(v)
+			e.col.size -= listItemSize(v)
 			out = append(out, v)
 		}
-		if e.list.Len() == 0 {
+		if e.col.list.Len() == 0 {
 			return nil, nil
 		}
 		return e, nil
@@ -85,7 +85,7 @@ func (t *Tx) viewList(key string, fn func(d *deque)) error {
 		if e.kind != KindList {
 			return ErrWrongType
 		}
-		fn(e.list)
+		fn(e.col.list)
 		return nil
 	})
 }
@@ -137,13 +137,13 @@ func (t *Tx) LSet(key string, index int, val string) error {
 		}
 		i := index
 		if i < 0 {
-			i += e.list.Len()
+			i += e.col.list.Len()
 		}
-		if i < 0 || i >= e.list.Len() {
+		if i < 0 || i >= e.col.list.Len() {
 			return nil, ErrIndexRange
 		}
-		e.size += int64(len(val) - len(e.list.At(i)))
-		e.list.Set(i, val)
+		e.col.size += int64(len(val) - len(e.col.list.At(i)))
+		e.col.list.Set(i, val)
 		return e, nil
 	})
 }
@@ -157,15 +157,15 @@ func (t *Tx) LTrim(key string, start, stop int) error {
 		if e.kind != KindList {
 			return nil, ErrWrongType
 		}
-		s, en, ok := clampRange(start, stop, e.list.Len())
+		s, en, ok := clampRange(start, stop, e.col.list.Len())
 		if !ok {
 			return nil, nil
 		}
-		kept := e.list.Slice(s, en)
-		e.list.Replace(kept)
-		e.size = entryOverhead + int64(len(key))
+		kept := e.col.list.Slice(s, en)
+		e.col.list.Replace(kept)
+		e.col.size = entryOverhead + int64(len(key))
 		for _, v := range kept {
-			e.size += listItemSize(v)
+			e.col.size += listItemSize(v)
 		}
 		return e, nil
 	})
@@ -182,7 +182,7 @@ func (t *Tx) LRem(key string, count int, val string) (int, error) {
 		if e.kind != KindList {
 			return nil, ErrWrongType
 		}
-		vals := e.list.Values()
+		vals := e.col.list.Values()
 		kept := make([]string, 0, len(vals))
 		limit := count
 		if limit < 0 {
@@ -213,11 +213,11 @@ func (t *Tx) LRem(key string, count int, val string) (int, error) {
 		if removed == 0 {
 			return e, nil
 		}
-		e.size -= int64(removed) * listItemSize(val)
+		e.col.size -= int64(removed) * listItemSize(val)
 		if len(kept) == 0 {
 			return nil, nil
 		}
-		e.list.Replace(kept)
+		e.col.list.Replace(kept)
 		return e, nil
 	})
 	return removed, err
