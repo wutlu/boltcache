@@ -89,6 +89,12 @@ func (e *entry) expired(now int64) bool {
 	return e.expireAt != 0 && now >= e.expireAt
 }
 
+// expiredNow is expired(now()) that only reads the clock for keys with a
+// TTL: most keys have none, and time.Now showed up in profiles.
+func (e *entry) expiredNow() bool {
+	return e.expireAt != 0 && now() >= e.expireAt
+}
+
 // shard counters are per shard so hot paths never contend on a global
 // cache line. keys/mem/writes change only under the write lock; hits/misses
 // are bumped by concurrent readers.
@@ -203,11 +209,11 @@ func now() int64 { return time.Now().UnixNano() }
 
 // touch records an access for the eviction policies. It's skipped when no
 // limit is configured so unbounded caches don't pay for it.
-func (c *BoltCache) touch(e *entry, ts int64) {
+func (c *BoltCache) touch(e *entry) {
 	if !c.opts.limited() {
 		return
 	}
-	e.access.Store(ts)
+	e.access.Store(now())
 	if c.opts.EvictionPolicy == PolicyLFU {
 		lfuIncr(e)
 	}
@@ -345,15 +351,14 @@ func (t *Tx) view(key string, fn func(e *entry) error) error {
 		return err
 	}
 	defer t.unlockRead(i)
-	ts := now()
 	s := &c.shards[i]
 	e := s.m[key]
-	if e != nil && e.expired(ts) {
+	if e != nil && e.expiredNow() {
 		e = nil
 	}
 	if e != nil {
 		s.hits.Add(1)
-		c.touch(e, ts)
+		c.touch(e)
 	} else {
 		s.misses.Add(1)
 	}
@@ -402,9 +407,8 @@ func (t *Tx) modifyLocked(key string, fn mutator) error {
 	}
 	defer t.unlockWrite(i)
 	s := &c.shards[i]
-	ts := now()
 	e := s.m[key]
-	if e != nil && e.expired(ts) {
+	if e != nil && e.expiredNow() {
 		c.removeLocked(s, key, e)
 		c.expired.Add(1)
 		e = nil
@@ -426,13 +430,13 @@ func (t *Tx) modifyLocked(key string, fn mutator) error {
 	case e == nil:
 		s.m[key] = ne
 		c.account(s, 1, ne.size)
-		c.touch(ne, ts)
+		c.touch(ne)
 	default:
 		if ne != e {
 			s.m[key] = ne
 		}
 		c.account(s, 0, ne.size-oldSize)
-		c.touch(ne, ts)
+		c.touch(ne)
 	}
 	s.writes.Add(1)
 	return nil

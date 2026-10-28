@@ -26,6 +26,8 @@ REDIS_IMAGE="${REDIS_IMAGE:-redis:8.10.2}"
 VALKEY_IMAGE="${VALKEY_IMAGE:-valkey/valkey:9.2}"
 DRAGONFLY_IMAGE="${DRAGONFLY_IMAGE:-docker.dragonflydb.io/dragonflydb/dragonfly:v2.0.2}"
 BOLTCACHE_IMAGE="${BOLTCACHE_IMAGE:-boltcache:bench}"
+MEMTIER_IMAGE="${MEMTIER_IMAGE:-redislabs/memtier_benchmark:2.1.4}"
+MEMTIER_SECONDS="${MEMTIER_SECONDS:-15}"
 
 cpu_count() { # "0,1" -> 2, "0-3" -> 4
   python3 -c "import sys
@@ -47,7 +49,7 @@ if [[ "$BOLTCACHE_IMAGE" == "boltcache:bench" ]]; then
   log "building BoltCache image from $ROOT"
   docker build -q -t boltcache:bench "$ROOT" >/dev/null
 fi
-for img in "$REDIS_IMAGE" "$VALKEY_IMAGE" "$DRAGONFLY_IMAGE"; do docker pull -q "$img" >/dev/null; done
+for img in "$REDIS_IMAGE" "$VALKEY_IMAGE" "$DRAGONFLY_IMAGE" "$MEMTIER_IMAGE"; do docker pull -q "$img" >/dev/null; done
 
 # name|image|command (the port is $PORT)
 SERVERS=(
@@ -97,6 +99,31 @@ bench() { # $1 = pipeline, $2 = requests
       -r "$KEYSPACE" -d "$DATA_SIZE" --threads "$CLIENT_THREADS" --csv
 }
 
+# memtier: 50% SET / 50% GET on random keys, also recording how many CPU
+# cores the server actually used (from its cgroup), which shows whether it
+# is saturated or limited by a single thread.
+memtier() { # $1 = pipeline; prints "ops p50 p99 p999 cores"
+  local stats line
+  # Sample the server's CPU usage once per second from outside the
+  # container (images like distroless have no shell to exec into).
+  stats=$(mktemp)
+  docker stats bench-server --format '{{.CPUPerc}}' >"$stats" 2>/dev/null &
+  local spid=$!
+  line=$(docker run --rm --network host --cpuset-cpus "$CLIENT_CPUS" "$MEMTIER_IMAGE" \
+    -s 127.0.0.1 -p "$PORT" -t "$CLIENT_THREADS" -c "$(( (CLIENTS + CLIENT_THREADS - 1) / CLIENT_THREADS ))" \
+    --pipeline "$1" --ratio 1:1 --key-maximum "$KEYSPACE" --key-pattern R:R -d "$DATA_SIZE" \
+    --test-time "$MEMTIER_SECONDS" --hide-histogram 2>/dev/null | awk '/^Totals/{print $2, $6, $7, $8}')
+  kill "$spid" 2>/dev/null || true
+  wait "$spid" 2>/dev/null || true
+  # Median of the samples, skipping the first two (ramp-up); 100% = 1 core.
+  echo "$line $(tr -cd '0-9.%\n' <"$stats" | python3 -c "
+import sys, statistics
+v = [float(l.strip().rstrip('%')) for l in sys.stdin if l.strip().rstrip('%')]
+v = v[2:] or v or [0]
+print(round(statistics.median(v) / 100, 2))")"
+  rm -f "$stats"
+}
+
 for entry in "${SERVERS[@]}"; do
   IFS='|' read -r name image cmd <<<"$entry"
   slug=$(echo "$name" | tr 'A-Z ()' 'a-z_' | tr -cd 'a-z0-9_-')
@@ -107,6 +134,7 @@ for entry in "${SERVERS[@]}"; do
       log "$name, pipeline $p, round $r/$ROUNDS"
       start_server "$image" "$cmd"
       bench "$p" "$reqs" >"$OUT/${slug}_p${p}_r${r}.csv"
+      memtier "$p" >"$OUT/${slug}_memtier_p${p}_r${r}.txt"
       stop_server
     done
   done

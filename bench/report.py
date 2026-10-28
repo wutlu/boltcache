@@ -53,3 +53,34 @@ for pipeline in sorted(rps):
             cells.append(f"**{cell}**" if m == best else cell)
         print(f"| {test} | " + " | ".join(cells) + " |")
     print()
+
+# memtier results: ops/s, latency and server CPU usage.
+mt = defaultdict(lambda: defaultdict(list))  # mt[pipeline][server] = [(ops, p50, p99, p999, cores)]
+for name in servers:
+    for f in sorted(out.glob(f"{slug(name)}_memtier_p*_r*.txt")):
+        pipeline = int(f.name.split("_memtier_p", 1)[1].split("_")[0])
+        parts = f.read_text().split()
+        if len(parts) == 5:
+            mt[pipeline][name].append(tuple(float(x) for x in parts))
+if mt:
+    print("## memtier: 50% SET / 50% GET, random keys\n")
+    print("Median of the rounds. *Cores used* is the server's CPU time divided by wall time: "
+          "a server stuck at ~1-2 cores while more are available is limited by a single thread.\n")
+    for pipeline in sorted(mt):
+        print(f"### Pipeline {pipeline}\n")
+        print("| Server | ops/s | p50 ms | p99 ms | p99.9 ms | Cores used | ops per core-second |")
+        print("|---|---:|---:|---:|---:|---:|---:|")
+        best = max(statistics.median(r[0] for r in rows) for rows in mt[pipeline].values() if rows)
+        for name in servers:
+            rows = mt[pipeline][name]
+            if not rows:
+                continue
+            med = lambda i: statistics.median(r[i] for r in rows)
+            ops = med(0)
+            cell = f"{ops:,.0f}"
+            if ops == best:
+                cell = f"**{cell}**"
+            cores = med(4)
+            eff = f"{ops / cores:,.0f}" if cores > 0 else "–"
+            print(f"| {name} | {cell} | {med(1):.3f} | {med(2):.3f} | {med(3):.3f} | {cores:.2f} | {eff} |")
+        print()

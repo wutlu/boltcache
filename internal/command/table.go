@@ -57,6 +57,39 @@ func (sp *spec) arityOK(n int) bool {
 	return n >= -sp.arity
 }
 
+// singleKey returns the key of a command that addresses exactly one key,
+// without allocating.
+func (sp *spec) singleKey(args []string) (string, bool) {
+	if sp.getKeys != nil || sp.first != 1 || len(args) < 2 {
+		return "", false
+	}
+	last := sp.last
+	if last < 0 {
+		last += len(args)
+	}
+	if last != 1 {
+		return "", false
+	}
+	return args[1], true
+}
+
+// multiKey reports whether the command addresses more than one key, without
+// allocating.
+func (sp *spec) multiKey(args []string) bool {
+	if sp.getKeys != nil {
+		return len(sp.getKeys(args)) > 1
+	}
+	if sp.first <= 0 || sp.first >= len(args) {
+		return false
+	}
+	last := sp.last
+	if last < 0 {
+		last += len(args)
+	}
+	step := max(sp.step, 1)
+	return min(last, len(args)-1) >= sp.first+step
+}
+
 func (sp *spec) keys(args []string) []string {
 	if sp.getKeys != nil {
 		return sp.getKeys(args)
@@ -82,7 +115,13 @@ func (sp *spec) keys(args []string) []string {
 	return out
 }
 
-var table = map[string]*spec{}
+// table maps lower-case command names to specs. upperTable holds the
+// upper-case spellings most clients send, so lookup usually needs a single
+// map access without case conversion.
+var (
+	table      = map[string]*spec{}
+	upperTable = map[string]*spec{}
+)
 
 func register(name string, fn handler, arity int, flags flag, first, last, step int) *spec {
 	sp := &spec{name: name, fn: fn, arity: arity, flags: flags, first: first, last: last, step: step}
@@ -93,11 +132,15 @@ func register(name string, fn handler, arity int, flags flag, first, last, step 
 		sp.flags |= flagDenyOOM
 	}
 	table[name] = sp
+	upperTable[strings.ToUpper(name)] = sp
 	return sp
 }
 
 // lookup finds a command by case-insensitive name.
 func lookup(name string) *spec {
+	if sp, ok := upperTable[name]; ok {
+		return sp
+	}
 	if sp, ok := table[name]; ok {
 		return sp
 	}

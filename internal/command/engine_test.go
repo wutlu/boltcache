@@ -628,3 +628,17 @@ func TestExecPipelineMatchesSequential(t *testing.T) {
 		}
 	}
 }
+
+func TestMultiKeyMatchesKeys(t *testing.T) {
+	cases := [][]string{
+		{"GET", "a"}, {"DEL", "a"}, {"DEL", "a", "b"}, {"MSET", "a", "1"}, {"MSET", "a", "1", "b", "2"},
+		{"RENAME", "a", "b"}, {"LMOVE", "a", "b", "LEFT", "RIGHT"}, {"SINTER", "a"}, {"SINTER", "a", "b"},
+		{"EVAL", "x", "0"}, {"EVAL", "x", "2", "a", "b"}, {"PING"}, {"HSET", "h", "f", "v"},
+	}
+	for _, c := range cases {
+		sp := lookup(c[0])
+		if got, want := sp.multiKey(c), len(sp.keys(c)) > 1; got != want {
+			t.Errorf("%v: multiKey=%v, keys=%v", c, got, sp.keys(c))
+		}
+	}
+}

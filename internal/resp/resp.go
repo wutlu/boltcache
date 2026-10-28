@@ -158,22 +158,39 @@ func (p *Parser) Parse(dst [][]byte, buf []byte) (args [][]byte, n int, inline b
 // parseLength parses "<int>\r\n" starting at buf[start]. pos is the index
 // after the CRLF, or 0 when the line is incomplete.
 func parseLength(buf []byte, start int) (v, pos int, err error) {
-	i := bytes.IndexByte(buf[start:], '\n')
-	if i < 0 {
+	// Hand-rolled: lengths are short decimal numbers, and this runs for
+	// every argument of every command.
+	i := start
+	neg := false
+	if i < len(buf) && buf[i] == '-' {
+		neg = true
+		i++
+	}
+	digits := 0
+	for ; i < len(buf); i++ {
+		c := buf[i]
+		if c < '0' || c > '9' {
+			break
+		}
+		if digits == 18 {
+			return 0, 0, protoErr("invalid length")
+		}
+		v = v*10 + int(c-'0')
+		digits++
+	}
+	if i+1 >= len(buf) { // need "\r\n"
 		if len(buf)-start > 32 {
 			return 0, 0, protoErr("length line too long")
 		}
 		return 0, 0, nil
 	}
-	end := start + i
-	if end == start || buf[end-1] != '\r' {
-		return 0, 0, protoErr("invalid length line")
-	}
-	n, perr := strconv.Atoi(string(buf[start : end-1]))
-	if perr != nil {
+	if digits == 0 || buf[i] != '\r' || buf[i+1] != '\n' {
 		return 0, 0, protoErr("invalid length")
 	}
-	return n, end + 1, nil
+	if neg {
+		v = -v
+	}
+	return v, i + 2, nil
 }
 
 func parseInline(dst [][]byte, buf []byte) ([][]byte, int, bool, error) {
