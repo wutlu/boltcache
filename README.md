@@ -215,7 +215,7 @@ With 4 server cores (memtier, 50% SET / 50% GET, random keys):
 | Valkey 9.2, io-threads 4 | 1.92M | 331K | 0.127 ms |
 | Dragonfly 2.0 | 1.81M | 305K | 0.135 ms |
 
-BoltCache executes commands on every core. Redis' I/O threads only offload socket I/O, so Redis can't use more than about two cores' worth of work. Per core, single-threaded Redis is still the most CPU-efficient. Pipelined writes to a single hot key (`redis-benchmark`'s `ZADD` test) are BoltCache's weak spot, because they are serialized on one lock. This run used a laptop VM; the GitHub Actions results in [BENCHMARKS.md](BENCHMARKS.md) are smaller-scale but independently reproducible.
+BoltCache executes commands on every core. Redis' I/O threads only offload socket I/O, so Redis can't use more than about two cores' worth of work. Per core, single-threaded Redis is still the most CPU-efficient. Pipelined writes to a single hot key are serialized on one lock: with 4 cores, Redis with I/O threads still leads `redis-benchmark`'s `ZADD` test. This run used a laptop VM. On GitHub Actions' 2-core runner, which anyone can reproduce, BoltCache leads every pipelined `redis-benchmark` test, by 1.3–1.6× over Redis on SET/GET/INCR. See [BENCHMARKS.md](BENCHMARKS.md).
 
 Measure on your own hardware:
 
