@@ -7,10 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 func newTestCache(t *testing.T, opts Options) *BoltCache {
@@ -699,5 +701,91 @@ func TestRenameToUndeclaredKeyKeepsSource(t *testing.T) {
 	}
 	if v, ok, _ := c.Get("src"); !ok || v != "keep" {
 		t.Fatalf("source lost: %q %v", v, ok)
+	}
+}
+
+// One entry per key makes its size the main fixed memory cost; keep it in
+// the 48-byte size class.
+func TestEntrySize(t *testing.T) {
+	if n := unsafe.Sizeof(entry{}); n > 48 {
+		t.Fatalf("entry is %d bytes, want <= 48", n)
+	}
+}
+
+// Overwritten values must not accumulate: the table compacts dead records.
+func TestOverwriteReleasesOldValue(t *testing.T) {
+	c := newTestCache(t, Options{})
+	for i := 0; i < 10000; i++ {
+		if err := c.Set("k", strings.Repeat(strconv.Itoa(i%10), 64), 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := &c.shards[c.shardIndex("k")]
+	if n := s.t.live + s.t.dead; n > 2*minChunk {
+		t.Fatalf("one key holds %d bytes of records", n)
+	}
+	if v, _, _ := c.Get("k"); v != strings.Repeat("9", 64) {
+		t.Fatalf("value %q", v)
+	}
+}
+
+func TestMSetAtomicOverwritesAndAccounting(t *testing.T) {
+	c := newTestCache(t, Options{})
+	if _, err := c.LPush("l", "x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Set("ttl", "v", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	keys := []string{"l", "ttl", "new"}
+	err := c.Atomic(keys, false, func(tx *Tx) error {
+		return tx.MSet([]string{"l", "1", "ttl", "2", "new", "3"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, k := range keys {
+		v, ok, err := c.Get(k)
+		if err != nil || !ok || v != strconv.Itoa(i+1) {
+			t.Fatalf("%s = %q %v %v", k, v, ok, err)
+		}
+	}
+	if d, state, _ := c.TTL("ttl"); state != TTLNoExpire {
+		t.Fatalf("MSET kept a TTL: %v (state %d)", d, state)
+	}
+	// Undeclared keys are rejected before anything is written.
+	err = c.Atomic([]string{"l"}, false, func(tx *Tx) error {
+		return tx.MSet([]string{"l", "9", "other-shard-key", "9"})
+	})
+	if v, _, _ := c.Get("l"); err == nil && c.ShardOf("other-shard-key") != c.ShardOf("l") || v != "1" {
+		t.Fatalf("undeclared key: err=%v l=%q", err, v)
+	}
+	for _, k := range keys {
+		if _, err := c.Delete(k); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if c.Len() != 0 || c.UsedMemory() != 0 {
+		t.Fatalf("after delete: %d keys, %d bytes", c.Len(), c.UsedMemory())
+	}
+}
+
+// A key recreated after expiring must not inherit the old expiration.
+func TestIncrAfterExpiryHasNoTTL(t *testing.T) {
+	for _, opts := range []Options{{}, {MaxKeys: 1000}} {
+		c := newTestCache(t, opts)
+		if err := c.Set("k", "5", 20*time.Millisecond); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(30 * time.Millisecond)
+		if n, err := c.IncrBy("k", 1); err != nil || n != 1 {
+			t.Fatalf("incr = %d %v", n, err)
+		}
+		if v, ok, _ := c.Get("k"); !ok || v != "1" {
+			t.Fatalf("get = %q %v", v, ok)
+		}
+		if _, state, _ := c.TTL("k"); state != TTLNoExpire {
+			t.Fatalf("ttl state %d", state)
+		}
 	}
 }

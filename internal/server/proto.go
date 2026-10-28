@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/panjf2000/gnet/v2"
 	"github.com/panjf2000/gnet/v2/pkg/logging"
@@ -63,6 +64,8 @@ type protoConn struct {
 	in      []byte     // unconsumed input (a partially received command)
 	batch   [][]string // commands parsed in the current read
 	arena   []string   // backing storage for the argument slices in batch
+	cmdName string     // last command name, reused while clients repeat it
+	cmdView bool       // cmdName's arguments may alias the input buffer
 
 	textPush atomic.Bool  // deliver pub/sub messages in the legacy format
 	pending  atomic.Int64 // queued async push bytes
@@ -254,24 +257,41 @@ func (ps *protoServer) OnTraffic(gc gnet.Conn) (action gnet.Action) {
 	return gnet.None
 }
 
-// toStrings converts a parsed command to strings with a single allocation:
-// all arguments are copied into one string and sliced from it. The []string
-// itself comes from pc.arena, which is reused on the next read, so the
-// engine must not keep argument slices (MULTI copies queued commands).
+// toStrings converts a parsed command to strings. Commands that never keep
+// their arguments (command.ArgsAreTransient: GET, SET, INCR...) get strings
+// aliasing the input buffer, without allocating. Others get one allocation:
+// the arguments after the command name are copied into one string and
+// sliced from it, so values a collection stores keep only their own
+// command's bytes alive. The command name is reused across commands. The
+// []string itself comes from pc.arena, which is reused on the next read, so
+// the engine must not keep argument slices (MULTI copies queued commands).
 func (pc *protoConn) toStrings(args [][]byte) []string {
+	start := len(pc.arena)
+	if string(args[0]) != pc.cmdName {
+		pc.cmdName = string(args[0])
+		pc.cmdView = command.ArgsAreTransient(pc.cmdName)
+	}
+	pc.arena = append(pc.arena, pc.cmdName)
+	if pc.cmdView {
+		// The command doesn't keep its arguments, and the input buffer
+		// stays untouched until the batch has run: alias it.
+		for _, a := range args[1:] {
+			pc.arena = append(pc.arena, unsafe.String(unsafe.SliceData(a), len(a)))
+		}
+		return pc.arena[start:len(pc.arena):len(pc.arena)]
+	}
 	total := 0
-	for _, a := range args {
+	for _, a := range args[1:] {
 		total += len(a)
 	}
 	var b strings.Builder
 	b.Grow(total)
-	for _, a := range args {
+	for _, a := range args[1:] {
 		b.Write(a)
 	}
 	joined := b.String()
-	start := len(pc.arena)
 	off := 0
-	for _, a := range args {
+	for _, a := range args[1:] {
 		pc.arena = append(pc.arena, joined[off:off+len(a)])
 		off += len(a)
 	}

@@ -395,6 +395,7 @@ func (e *Engine) execScript(s *Session, tx *cache.Tx, proto *lua.FunctionProto, 
 
 	ss := *s // script-local session sharing auth/identity
 	ss.tx, ss.inScript, ss.inMulti = tx, true, false
+	ss.pipelining = false // ss is discarded: count its commands directly
 	v.cur = &scriptRun{e: e, s: &ss, readOnly: readOnly}
 
 	ctx, cancel := context.WithTimeout(context.Background(), e.cfg.ScriptTimeout)

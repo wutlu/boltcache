@@ -32,12 +32,9 @@ func registerStringCommands() {
 }
 
 func cmdGet(_ *Engine, _ *Session, db *cache.Tx, args []string, w resp.Writer) {
-	v, ok, err := db.Get(args[1])
-	if err != nil {
+	if err := db.GetTo(args[1], w); err != nil {
 		writeErr(w, err)
-		return
 	}
-	writeOptional(w, v, ok)
 }
 
 // parseSetArgs parses SET options: EX|PX|EXAT|PXAT|KEEPTTL, NX|XX and GET.
@@ -257,11 +254,9 @@ func cmdMSet(_ *Engine, _ *Session, db *cache.Tx, args []string, w resp.Writer) 
 		w.Error("ERR wrong number of arguments for 'mset' command")
 		return
 	}
-	for i := 1; i < len(args); i += 2 {
-		if err := db.Set(args[i], args[i+1], 0); err != nil {
-			writeErr(w, err)
-			return
-		}
+	if err := db.MSet(args[1:]); err != nil {
+		writeErr(w, err)
+		return
 	}
 	w.Simple("OK")
 }

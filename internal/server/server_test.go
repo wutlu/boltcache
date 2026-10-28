@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -787,5 +788,55 @@ func TestSortedSetsEndToEnd(t *testing.T) {
 	ts2 := startServer(t, cfg2)
 	if s := goRedis(t, ts2.resp, "").ZScore(ctx, "board", "cy").Val(); s != 175 {
 		t.Fatalf("score after restart = %v", s)
+	}
+}
+
+// Commands like SET get arguments that alias the connection's input buffer
+// (see protoConn.toStrings). Values must survive the buffer being reused by
+// later reads, including when queued by MULTI and run by EXEC later.
+func TestTransientArgumentsAreCopied(t *testing.T) {
+	ts := startServer(t, testConfig(t))
+	ctx := context.Background()
+	rdb := goRedis(t, ts.resp, "")
+	val := func(i int) string { return strings.Repeat(strconv.Itoa(i%10), 20+i%7) }
+	pipe := rdb.Pipeline()
+	for i := 0; i < 2000; i++ {
+		pipe.Set(ctx, "k"+strconv.Itoa(i), val(i), 0)
+		pipe.Incr(ctx, "n"+strconv.Itoa(i%10))
+	}
+	pipe.MSet(ctx, "m1", "one", "m2", "two")
+	if _, err := pipe.Exec(ctx); err != nil {
+		t.Fatal(err)
+	}
+	conn := rdb.Conn()
+	defer conn.Close()
+	if err := conn.Process(ctx, redis.NewStatusCmd(ctx, "MULTI")); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 50; i++ {
+		conn.Process(ctx, redis.NewStatusCmd(ctx, "SET", "q"+strconv.Itoa(i), val(i)))
+	}
+	// Unrelated traffic on another connection before EXEC.
+	for i := 0; i < 200; i++ {
+		rdb.Set(ctx, "noise", strings.Repeat("z", 100+i), 0)
+	}
+	if err := conn.Process(ctx, redis.NewSliceCmd(ctx, "EXEC")); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2000; i++ {
+		if v := rdb.Get(ctx, "k"+strconv.Itoa(i)).Val(); v != val(i) {
+			t.Fatalf("k%d = %q, want %q", i, v, val(i))
+		}
+	}
+	for i := 0; i < 50; i++ {
+		if v := rdb.Get(ctx, "q"+strconv.Itoa(i)).Val(); v != val(i) {
+			t.Fatalf("q%d = %q, want %q", i, v, val(i))
+		}
+	}
+	if n := rdb.Get(ctx, "n3").Val(); n != "200" {
+		t.Fatalf("n3 = %s", n)
+	}
+	if v := rdb.MGet(ctx, "m1", "m2").Val(); v[0] != "one" || v[1] != "two" {
+		t.Fatalf("mget = %v", v)
 	}
 }

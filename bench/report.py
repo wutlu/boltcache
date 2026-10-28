@@ -27,6 +27,8 @@ for name in servers:
 
 env_lines = (out / "env.txt").read_text().splitlines()
 env = dict(line.split("=", 1) for line in env_lines if "=" in line)
+# Lines like "clients=50 requests=..." hold several settings.
+params = dict(tok.split("=", 1) for line in env_lines[4:5] for tok in line.split() if "=" in tok)
 images = [line.split("|")[1] for line in (out / "servers.txt").read_text().splitlines() if line]
 print("# Benchmark results\n")
 print(f"- CPU: {env.get('cpu_model', '?')} ({env.get('cpus', '?')} logical CPUs), {env.get('kernel', '')}")
@@ -84,3 +86,25 @@ if mt:
             eff = f"{ops / cores:,.0f}" if cores > 0 else "–"
             print(f"| {name} | {cell} | {med(1):.3f} | {med(2):.3f} | {med(3):.3f} | {cores:.2f} | {eff} |")
         print()
+
+# Memory per key.
+mem = {}
+for name in servers:
+    f = out / f"{slug(name)}_memory.txt"
+    if f.exists():
+        parts = f.read_text().split()
+        if len(parts) == 2:
+            mem[name] = tuple(int(x) for x in parts)
+if mem:
+    print(f"## Memory: {int(params.get('memory_keys', 0)):,} keys, {params.get('data_size', '?')}-byte values\n")
+    print("Resident memory growth divided by the number of keys (lower is better), after loading "
+          "the keys and after overwriting each of them once.\n")
+    print("| Server | bytes/key after load | bytes/key after overwrite |")
+    print("|---|---:|---:|")
+    best = min(v[1] for v in mem.values())
+    for name in servers:
+        if name in mem:
+            a, b = mem[name]
+            cell = f"**{b}**" if b == best else f"{b}"
+            print(f"| {name} | {a} | {cell} |")
+    print()

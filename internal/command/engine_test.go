@@ -3,6 +3,7 @@ package command
 import (
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -640,5 +641,45 @@ func TestMultiKeyMatchesKeys(t *testing.T) {
 		if got, want := sp.multiKey(c), len(sp.keys(c)) > 1; got != want {
 			t.Errorf("%v: multiKey=%v, keys=%v", c, got, sp.keys(c))
 		}
+	}
+}
+
+// Pipelines from many sessions hammering one key go through flat combining
+// (see combineBatch): every reply must reach its own session, in order,
+// and no increment may be lost.
+func TestPipelineCombiningHotKey(t *testing.T) {
+	h := newHarness(t, Config{})
+	const sessions, rounds, depth = 8, 300, 16
+	var wg sync.WaitGroup
+	for g := 0; g < sessions; g++ {
+		s := h.e.NewSession("test", nil)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			batch := make([][]string, depth)
+			for i := range batch {
+				batch[i] = []string{"INCR", "hot"}
+			}
+			for r := 0; r < rounds; r++ {
+				var rec resp.Recorder
+				h.e.ExecPipeline(s, batch, &rec)
+				res := rec.Results()
+				if len(res) != depth {
+					t.Errorf("got %d replies, want %d", len(res), depth)
+					return
+				}
+				// One batch runs under one lock: its counters are consecutive.
+				for i := 1; i < depth; i++ {
+					if res[i].Int != res[i-1].Int+1 {
+						t.Errorf("batch replies not consecutive: %v", res)
+						return
+					}
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if got := h.do("GET", "hot").Str; got != strconv.Itoa(sessions*rounds*depth) {
+		t.Fatalf("counter = %s, want %d", got, sessions*rounds*depth)
 	}
 }

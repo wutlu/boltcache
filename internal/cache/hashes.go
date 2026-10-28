@@ -8,7 +8,7 @@ import (
 )
 
 func newHash(key string) *entry {
-	return &entry{kind: KindHash, hash: make(map[string]string), size: entryOverhead + int64(len(key))}
+	return &entry{kind: KindHash, col: &coll{hash: make(map[string]string), size: entryOverhead + int64(len(key))}}
 }
 
 func hashFieldSize(f, v string) int64 { return hashOverhead + int64(len(f)+len(v)) }
@@ -35,19 +35,19 @@ func (t *Tx) hset(key string, pairs []string, nx bool) (int, error) {
 		}
 		for i := 0; i+1 < len(pairs); i += 2 {
 			f, v := pairs[i], pairs[i+1]
-			old, exists := e.hash[f]
+			old, exists := e.col.hash[f]
 			if exists {
 				if nx {
 					continue
 				}
-				e.size += int64(len(v) - len(old))
+				e.col.size += int64(len(v) - len(old))
 			} else {
-				e.size += hashFieldSize(f, v)
+				e.col.size += hashFieldSize(f, v)
 				created++
 			}
-			e.hash[f] = v
+			e.col.hash[f] = v
 		}
-		if len(e.hash) == 0 {
+		if len(e.col.hash) == 0 {
 			return nil, nil
 		}
 		return e, nil
@@ -63,7 +63,7 @@ func (t *Tx) viewHash(key string, fn func(h map[string]string)) error {
 		if e.kind != KindHash {
 			return ErrWrongType
 		}
-		fn(e.hash)
+		fn(e.col.hash)
 		return nil
 	})
 }
@@ -141,13 +141,13 @@ func (t *Tx) HDel(key string, fields ...string) (int, error) {
 			return nil, ErrWrongType
 		}
 		for _, f := range fields {
-			if v, ok := e.hash[f]; ok {
-				delete(e.hash, f)
-				e.size -= hashFieldSize(f, v)
+			if v, ok := e.col.hash[f]; ok {
+				delete(e.col.hash, f)
+				e.col.size -= hashFieldSize(f, v)
 				removed++
 			}
 		}
-		if len(e.hash) == 0 {
+		if len(e.col.hash) == 0 {
 			return nil, nil
 		}
 		return e, nil
@@ -185,7 +185,7 @@ func (t *Tx) HIncrBy(key, field string, delta int64) (int64, error) {
 			return nil, ErrWrongType
 		}
 		var cur int64
-		old, exists := e.hash[field]
+		old, exists := e.col.hash[field]
 		if exists {
 			n, err := strconv.ParseInt(old, 10, 64)
 			if err != nil {
@@ -213,7 +213,7 @@ func (t *Tx) HIncrByFloat(key, field string, delta float64) (float64, error) {
 			return nil, ErrWrongType
 		}
 		var cur float64
-		old, exists := e.hash[field]
+		old, exists := e.col.hash[field]
 		if exists {
 			f, err := strconv.ParseFloat(old, 64)
 			if err != nil {
@@ -233,11 +233,11 @@ func (t *Tx) HIncrByFloat(key, field string, delta float64) (float64, error) {
 
 func (e *entry) setHashField(field, val, old string, exists bool) {
 	if exists {
-		e.size += int64(len(val) - len(old))
+		e.col.size += int64(len(val) - len(old))
 	} else {
-		e.size += hashFieldSize(field, val)
+		e.col.size += hashFieldSize(field, val)
 	}
-	e.hash[field] = val
+	e.col.hash[field] = val
 }
 
 var errHashNotInteger = errors.New("ERR hash value is not an integer")

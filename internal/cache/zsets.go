@@ -19,8 +19,8 @@ type ZMember struct {
 }
 
 func newZSet(key string) *entry {
-	return &entry{kind: KindZSet, zset: &zset{dict: map[string]float64{}, tree: newZTree()},
-		size: entryOverhead + int64(len(key))}
+	return &entry{kind: KindZSet, col: &coll{zset: &zset{dict: map[string]float64{}, tree: newZTree()},
+		size: entryOverhead + int64(len(key))}}
 }
 
 func zsetMemberSize(m string) int64 { return 64 + int64(len(m)) }
@@ -45,28 +45,28 @@ type ZAddResult struct {
 }
 
 func (e *entry) zsetPut(member string, score float64) {
-	z := e.zset
+	z := e.col.zset
 	if old, ok := z.dict[member]; ok {
 		if old == score {
 			return
 		}
 		z.tree.delete(zitem{old, member})
 	} else {
-		e.size += zsetMemberSize(member)
+		e.col.size += zsetMemberSize(member)
 	}
 	z.dict[member] = score
 	z.tree.insert(zitem{score, member})
 }
 
 func (e *entry) zsetDel(member string) bool {
-	z := e.zset
+	z := e.col.zset
 	score, ok := z.dict[member]
 	if !ok {
 		return false
 	}
 	delete(z.dict, member)
 	z.tree.delete(zitem{score, member})
-	e.size -= zsetMemberSize(member)
+	e.col.size -= zsetMemberSize(member)
 	return true
 }
 
@@ -86,7 +86,7 @@ func (t *Tx) ZAdd(key string, opts ZAddOptions, members []ZMember) (ZAddResult, 
 			return nil, ErrWrongType
 		}
 		for _, m := range members {
-			old, exists := e.zset.dict[m.Member]
+			old, exists := e.col.zset.dict[m.Member]
 			if (opts.NX && exists) || (opts.XX && !exists) {
 				continue
 			}
@@ -110,7 +110,7 @@ func (t *Tx) ZAdd(key string, opts ZAddOptions, members []ZMember) (ZAddResult, 
 			}
 			e.zsetPut(m.Member, score)
 		}
-		if len(e.zset.dict) == 0 {
+		if len(e.col.zset.dict) == 0 {
 			return nil, nil
 		}
 		return e, nil
@@ -126,7 +126,7 @@ func (t *Tx) viewZSet(key string, fn func(z *zset)) error {
 		if e.kind != KindZSet {
 			return ErrWrongType
 		}
-		fn(e.zset)
+		fn(e.col.zset)
 		return nil
 	})
 }
@@ -191,7 +191,7 @@ func (t *Tx) ZRem(key string, members ...string) (int, error) {
 				removed++
 			}
 		}
-		if len(e.zset.dict) == 0 {
+		if len(e.col.zset.dict) == 0 {
 			return nil, nil
 		}
 		return e, nil
@@ -281,16 +281,16 @@ func (t *Tx) ZPop(key string, count int, max bool) ([]ZMember, error) {
 		if e.kind != KindZSet {
 			return nil, ErrWrongType
 		}
-		for i := 0; i < count && e.zset.tree.length > 0; i++ {
+		for i := 0; i < count && e.col.zset.tree.length > 0; i++ {
 			r := 0
 			if max {
-				r = e.zset.tree.length - 1
+				r = e.col.zset.tree.length - 1
 			}
-			it := e.zset.tree.at(r).item()
+			it := e.col.zset.tree.at(r).item()
 			out = append(out, ZMember{it.member, it.score})
 			e.zsetDel(it.member)
 		}
-		if len(e.zset.dict) == 0 {
+		if len(e.col.zset.dict) == 0 {
 			return nil, nil
 		}
 		return e, nil
@@ -307,11 +307,11 @@ func (t *Tx) zremRange(key string, pick func(z *zset) []ZMember) (int, error) {
 		if e.kind != KindZSet {
 			return nil, ErrWrongType
 		}
-		for _, m := range pick(e.zset) {
+		for _, m := range pick(e.col.zset) {
 			e.zsetDel(m.Member)
 			removed++
 		}
-		if len(e.zset.dict) == 0 {
+		if len(e.col.zset.dict) == 0 {
 			return nil, nil
 		}
 		return e, nil

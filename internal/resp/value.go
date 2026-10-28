@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 )
 
 // Kind identifies the type of a reply Value.
@@ -107,10 +108,13 @@ func (r *Recorder) push(v Value) {
 	}
 }
 
-func (r *Recorder) Simple(s string)    { r.push(Value{Kind: KindSimple, Str: s}) }
-func (r *Recorder) Error(msg string)   { r.push(Value{Kind: KindError, Str: msg}) }
-func (r *Recorder) Int(n int64)        { r.push(Value{Kind: KindInt, Int: n}) }
-func (r *Recorder) Bulk(s string)      { r.push(Value{Kind: KindBulk, Str: s}) }
+func (r *Recorder) Simple(s string)  { r.push(Value{Kind: KindSimple, Str: s}) }
+func (r *Recorder) Error(msg string) { r.push(Value{Kind: KindError, Str: msg}) }
+func (r *Recorder) Int(n int64)      { r.push(Value{Kind: KindInt, Int: n}) }
+
+// Bulk records a copy of s: writers may be handed strings that are only
+// valid during the call (see cache.Tx.GetTo).
+func (r *Recorder) Bulk(s string)      { r.push(Value{Kind: KindBulk, Str: strings.Clone(s)}) }
 func (r *Recorder) BulkBytes(b []byte) { r.push(Value{Kind: KindBulk, Str: string(b)}) }
 func (r *Recorder) Null()              { r.push(Value{Kind: KindNull}) }
 func (r *Recorder) NullArray()         { r.push(Value{Kind: KindNullArray}) }
