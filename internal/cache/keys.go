@@ -38,14 +38,12 @@ func (t *Tx) Del(keys ...string) (int, error) {
 func (t *Tx) Exists(keys ...string) (int, error) {
 	n := 0
 	for _, k := range keys {
-		err := t.view(k, func(e *entry) error {
-			if e != nil {
-				n++
-			}
-			return nil
-		})
+		_, ok, err := t.peek(k)
 		if err != nil {
 			return n, err
+		}
+		if ok {
+			n++
 		}
 	}
 	return n, nil
@@ -53,14 +51,8 @@ func (t *Tx) Exists(keys ...string) (int, error) {
 
 // Type returns the kind of value at key (KindNone when absent).
 func (t *Tx) Type(key string) (Kind, error) {
-	k := KindNone
-	err := t.view(key, func(e *entry) error {
-		if e != nil {
-			k = e.kind
-		}
-		return nil
-	})
-	return k, err
+	ki, _, err := t.peek(key)
+	return ki.kind, err
 }
 
 // ExpireCond restricts when an expiration is applied (EXPIRE NX|XX|GT|LT).
@@ -143,42 +135,27 @@ const (
 // has no timeout, the duration is 0 and state is TTLNoKey/TTLNoExpire;
 // otherwise state is 0.
 func (t *Tx) TTL(key string) (d time.Duration, state int, err error) {
-	state = TTLNoKey
-	err = t.view(key, func(e *entry) error {
-		if e == nil {
-			return nil
-		}
-		if e.expireAt == 0 {
-			state = TTLNoExpire
-			return nil
-		}
-		state = 0
-		d = time.Duration(e.expireAt - now())
-		if d < 0 {
-			d = 0
-		}
-		return nil
-	})
-	return
+	ki, ok, err := t.peek(key)
+	switch {
+	case err != nil || !ok:
+		return 0, TTLNoKey, err
+	case ki.expireAt == 0:
+		return 0, TTLNoExpire, nil
+	}
+	return max(time.Duration(ki.expireAt-now()), 0), 0, nil
 }
 
 // ExpireTime returns key's absolute expiration (zero time when none) with the
 // same state convention as TTL.
 func (t *Tx) ExpireTime(key string) (at time.Time, state int, err error) {
-	state = TTLNoKey
-	err = t.view(key, func(e *entry) error {
-		if e == nil {
-			return nil
-		}
-		if e.expireAt == 0 {
-			state = TTLNoExpire
-			return nil
-		}
-		state = 0
-		at = time.Unix(0, e.expireAt)
-		return nil
-	})
-	return
+	ki, ok, err := t.peek(key)
+	switch {
+	case err != nil || !ok:
+		return at, TTLNoKey, err
+	case ki.expireAt == 0:
+		return at, TTLNoExpire, nil
+	}
+	return time.Unix(0, ki.expireAt), 0, nil
 }
 
 // Keys returns all live keys matching pattern, sorted.
@@ -351,12 +328,6 @@ func (t *Tx) renameLocked(src, dst string, nx bool) (bool, error) {
 
 // MemoryUsage returns the approximate bytes used by key (0 when absent).
 func (t *Tx) MemoryUsage(key string) (int64, error) {
-	var n int64
-	err := t.view(key, func(e *entry) error {
-		if e != nil {
-			n = e.memSize(key)
-		}
-		return nil
-	})
-	return n, err
+	ki, _, err := t.peek(key)
+	return ki.size, err
 }

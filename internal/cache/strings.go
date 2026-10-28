@@ -343,38 +343,34 @@ func (t *Tx) Append(key, val string) (int, error) {
 
 // StrLen returns the length of the string at key.
 func (t *Tx) StrLen(key string) (int, error) {
-	var n int
-	err := t.view(key, func(e *entry) error {
-		if e == nil {
-			return nil
-		}
-		if e.kind != KindString {
-			return ErrWrongType
-		}
-		n = len(e.str)
-		return nil
-	})
-	return n, err
+	ki, ok, err := t.peek(key)
+	if err != nil || !ok {
+		return 0, err
+	}
+	if ki.kind != KindString {
+		return 0, ErrWrongType
+	}
+	return ki.strLen, nil
 }
 
 // GetRange returns the substring of the string at key between start and end
 // (inclusive, negative offsets count from the end).
 func (t *Tx) GetRange(key string, start, end int) (string, error) {
-	var out string
-	err := t.view(key, func(e *entry) error {
-		if e == nil {
-			return nil
-		}
-		if e.kind != KindString {
-			return ErrWrongType
-		}
-		s, en, ok := clampRange(start, end, len(e.str))
-		if ok {
-			out = e.str[s : en+1]
-		}
-		return nil
-	})
-	return out, err
+	_, i, r, unlock, err := t.readKey(key)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	if i < 0 {
+		return "", nil
+	}
+	if r.kind != KindString {
+		return "", ErrWrongType
+	}
+	if s, en, ok := clampRange(start, end, len(r.str)); ok {
+		return strings.Clone(r.str[s : en+1]), nil // copy only the range
+	}
+	return "", nil
 }
 
 // clampRange converts Redis-style inclusive (possibly negative) indexes into

@@ -440,6 +440,35 @@ func (t *Tx) readKey(key string) (*shard, int, rec, func(), error) {
 	return s, i, r, func() { t.unlockRead(si) }, nil
 }
 
+// keyInfo is what peek reports about a key without copying its value.
+type keyInfo struct {
+	kind     Kind
+	expireAt int64
+	strLen   int   // strings
+	size     int64 // accounted size
+}
+
+// peek returns information about key, or ok=false when it's absent or
+// expired.
+func (t *Tx) peek(key string) (ki keyInfo, ok bool, err error) {
+	s, i, r, unlock, err := t.readKey(key)
+	if err != nil {
+		return ki, false, err
+	}
+	defer unlock()
+	if i < 0 {
+		return ki, false, nil
+	}
+	ki.kind = r.kind
+	if r.kind == KindString {
+		ki.expireAt, ki.strLen, ki.size = r.expireAt, len(r.str), stringSize(key, r.str)
+	} else {
+		e := s.t.coll(r)
+		ki.expireAt, ki.size = e.expireAt, e.memSize(key)
+	}
+	return ki, true, nil
+}
+
 // view runs fn with the live entry for key (nil when absent or expired)
 // under a read lock. fn must not mutate the entry. Strings are passed as a
 // copy (the table may overwrite values in place); hot paths read records
@@ -516,7 +545,7 @@ func (t *Tx) writeKey(key string) (*shard, uint64, int, rec, func(), error) {
 		if exp != 0 && now() >= exp {
 			c.removeSlot(s, i, key)
 			c.expired.Add(1)
-			i = -1
+			i, r = -1, rec{} // nothing of the expired value may carry over
 		}
 	}
 	return s, h, i, r, func() { t.unlockWrite(si) }, nil

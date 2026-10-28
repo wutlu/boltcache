@@ -769,3 +769,23 @@ func TestMSetAtomicOverwritesAndAccounting(t *testing.T) {
 		t.Fatalf("after delete: %d keys, %d bytes", c.Len(), c.UsedMemory())
 	}
 }
+
+// A key recreated after expiring must not inherit the old expiration.
+func TestIncrAfterExpiryHasNoTTL(t *testing.T) {
+	for _, opts := range []Options{{}, {MaxKeys: 1000}} {
+		c := newTestCache(t, opts)
+		if err := c.Set("k", "5", 20*time.Millisecond); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(30 * time.Millisecond)
+		if n, err := c.IncrBy("k", 1); err != nil || n != 1 {
+			t.Fatalf("incr = %d %v", n, err)
+		}
+		if v, ok, _ := c.Get("k"); !ok || v != "1" {
+			t.Fatalf("get = %q %v", v, ok)
+		}
+		if _, state, _ := c.TTL("k"); state != TTLNoExpire {
+			t.Fatalf("ttl state %d", state)
+		}
+	}
+}

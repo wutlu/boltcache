@@ -2,6 +2,29 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+A memory and multi-core release.
+
+### Performance
+
+- **A new keyspace engine.** Each shard stores keys and string values as records in byte arenas behind an open-addressing index of 8-byte slots, instead of a Go map of heap objects. Neither contains pointers, so the garbage collector no longer scans the keyspace. A key with a 32-byte value now takes about 90 bytes of RSS instead of 252 in 2.2, on par with Redis (93). Same-length values are overwritten in place, and dead records are compacted per shard.
+- **Hot keys scale across cores.** Pipelined commands for a busy shard use flat combining: the core holding the shard lock runs the batches that other cores queued, so the data stays in one core's cache.
+- **Fewer allocations per command.**
+  - Commands that don't keep their arguments (GET, SET, INCR, MSET, DEL, EXPIRE...) read them straight from the connection's buffer.
+  - GET encodes its reply while the key is locked, without copying the value.
+  - Multi-key commands lock their shards without allocating.
+  - MSET writes its keys directly, roughly halving its cost.
+- **Cheaper locking.** Shard locks are a reader/writer spin lock with a single atomic instruction per acquisition. Counters maintained under the lock avoid atomic adds, and pipelined commands are counted once per pipeline.
+
+### Changed
+
+- `max_memory` accounting charges string keys their real cost (about 24 bytes plus key and value) instead of 96 bytes plus key and value, so a memory-limited cache holds more keys before evicting.
+
+### Added
+
+- `bench/run.sh` measures memory per key (after loading 1M keys and after overwriting them) and runs `SADD` and `MSET`.
+
 ## [2.2.0] - 2026-10-28
 
 A performance release. With 4 server cores, BoltCache now serves 3.2M ops/s on a 50/50 SET/GET mix with pipelining: 2.2× Redis 8.10, 1.5× Redis with I/O threads, and 1.7–1.8× Valkey and Dragonfly. Without pipelining it serves 441K ops/s at 0.08 ms median latency, 2.4× Redis. On one core it now matches or beats Redis on most commands. See [BENCHMARKS.md](BENCHMARKS.md).
