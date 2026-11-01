@@ -2,7 +2,7 @@
 
 # Build natively on the builder's platform and cross-compile, so multi-arch
 # images don't need emulation.
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev
