@@ -5,13 +5,13 @@ go 1.26.0
 require (
 	github.com/fatih/color v1.19.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/mattn/go-isatty v0.0.20
+	github.com/mattn/go-isatty v0.0.24
 	github.com/mattn/go-runewidth v0.0.31
 	github.com/panjf2000/gnet/v2 v2.10.0
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/spf13/cobra v1.10.2
 	github.com/yuin/gopher-lua v1.1.2
-	go.yaml.in/yaml/v3 v3.0.5
+	go.yaml.in/yaml/v3 v3.0.6
 	golang.org/x/time v0.16.0
 )
 
